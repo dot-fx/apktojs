@@ -189,11 +189,11 @@ pub fn find_switch_end(
             }
         }
     }
-    
+
     if candidate_ends.is_empty() {
         return until;
     }
-    
+
     let mut freq: HashMap<i32, usize> = HashMap::new();
     for &e in &candidate_ends { *freq.entry(e).or_insert(0) += 1; }
 

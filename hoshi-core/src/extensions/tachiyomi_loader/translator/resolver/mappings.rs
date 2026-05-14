@@ -9,6 +9,8 @@ pub fn well_known_method(class: &str, method: &str) -> Option<String> {
         ("StringBuilder", "append")   => "append",
         ("StringBuilder", "toString") => "toString",
 
+        ("Object", "getClass") => "getClass",
+
 
         // OkHttp Request.Builder
         ("Builder", "url")     => "url",
@@ -114,7 +116,7 @@ pub fn from_dex_type(desc: &str) -> String {
 pub fn apply_well_known(js: &str) -> String {
     let mut s = js.to_string();
 
-    
+
     let re_tostring = Regex::new(r#"\((\w+) \+ ""\)"#).unwrap();
     s = re_tostring.replace_all(&s, "String($1)").into_owned();
 

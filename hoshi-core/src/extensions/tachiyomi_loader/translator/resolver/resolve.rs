@@ -1,6 +1,6 @@
 use regex::Regex;
 use crate::extensions::tachiyomi_loader::ExtractedDex;
-use crate::extensions::tachiyomi_loader::translator::resolver::cleanup::remove_duplicate_stmts;
+use crate::extensions::tachiyomi_loader::translator::resolver::cleanup::{collapse_companion_chains, remove_duplicate_stmts, remove_serializers_module_stmts};
 use crate::extensions::tachiyomi_loader::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
 use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
 use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
@@ -16,11 +16,13 @@ pub fn resolve(raw_js: &str, extracted: &ExtractedDex) -> String {
     js = resolve_sfields(&js, &pool);
     js = resolve_methods(&js, &pool);
     js = resolve_types(&js, &pool);
+    js = remove_getclass_stmts(&js);
+    js = remove_serializers_module_stmts(&js);
+    js = collapse_companion_chains(&js);
     js = remove_duplicate_stmts(&js);
 
     js
 }
-
 fn resolve_strings(js: &str, pool: &Pool) -> String {
     let re = Regex::new(r"/\* string#(\d+) \*/").unwrap();
     re.replace_all(js, |caps: &regex::Captures| {
@@ -110,4 +112,9 @@ fn resolve_sfields(js: &str, pool: &Pool) -> String {
             None => format!("/* static_field#{} */", idx),
         }
     }).into_owned()
+}
+
+fn remove_getclass_stmts(js: &str) -> String {
+    let re = Regex::new(r"[ \t]*\S+\.getClass\(\);\n").unwrap();
+    re.replace_all(js, "").into_owned()
 }

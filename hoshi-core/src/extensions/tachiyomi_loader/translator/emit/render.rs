@@ -182,7 +182,7 @@ fn render_stmts(
                     }
 
                     for k in i..j {
-                        if k == i {
+                        if k == j - 1 {
                             lines.push(format!("{}  case {}: {{", pad, cases[k].0));
                         } else {
                             lines.push(format!("{}  case {}:", pad, cases[k].0));

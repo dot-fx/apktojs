@@ -25,8 +25,8 @@ impl LiftCtx {
         if let JsExpr::Reg(s) = &expr {
             if *s == r { return; }
         }
-        self.regs.insert(r, expr.clone());
         self.push(offset, JsStmt::Assign { reg: r, expr });
+        self.regs.insert(r, JsExpr::Reg(r));
     }
 
     fn push(&mut self, offset: i32, stmt: JsStmt) {
@@ -80,6 +80,7 @@ impl LiftCtx {
             Insn::MoveResult(d) | Insn::MoveResultWide(d) | Insn::MoveResultObject(d) => {
                 let e = self.result.take()
                     .unwrap_or(JsExpr::Raw("/* no-result */".into()));
+                self.pending_call = None;
                 self.set(*d, e, off);
             }
 
