@@ -99,28 +99,21 @@ fn reloop(
             let mut loop_visited = HashSet::new();
             loop_visited.insert(idx);
 
-            let header_cond = block_is_loop_guard(block, block.offset);
+            let (header_cond, consumed_stmt): (Option<JsExpr>, Option<usize>) =
+                match block_is_loop_guard(block, loop_end) {
+                    Some(c) => {
+                        let (cond, stmt) = resolve_loop_condition(block, c);
+                        (Some(cond), stmt)
+                    }
+                    None => (None, None),
+                };
 
             let mut body = Vec::new();
-            body.extend(block.stmts.iter().cloned());
-
-            // --- FIX: Preserving the loop header exit condition ---
-            if let Terminator::CondGoto { cond, if_true, if_false } = &block.term {
-                if *if_true >= loop_end {
-                    body.push(JsStmt::If {
-                        cond: cond.clone(),
-                        then_body: vec![JsStmt::Break],
-                        else_body: vec![],
-                    });
-                } else if *if_false >= loop_end {
-                    body.push(JsStmt::If {
-                        cond: interpreter::negate(cond.clone()),
-                        then_body: vec![JsStmt::Break],
-                        else_body: vec![],
-                    });
+            for (i, stmt) in block.stmts.iter().cloned().enumerate() {
+                if Some(i) != consumed_stmt {
+                    body.push(stmt);
                 }
             }
-            // ------------------------------------------------------
 
             reloop(
                 blocks,
@@ -141,7 +134,10 @@ fn reloop(
             }
 
             if let Some(cond) = header_cond {
-                out.push(JsStmt::While { cond, body });
+                out.push(JsStmt::While {
+                    cond,
+                    body,
+                });
             } else if let Some((cond, break_idx)) = recover_loop_condition(&body) {
                 let mut body = body;
                 body.remove(break_idx);
@@ -220,21 +216,6 @@ fn reloop(
                     break;
                 }
 
-                if loop_exit.map_or(false, |e| if_true >= e) {
-                    let fall_idx = b2i.get(&if_false).copied().unwrap_or(blocks.len());
-                    let mut body = Vec::new();
-                    let mut branch_visited = visited.clone();
-                    reloop(blocks, b2i, loop_headers, preds,
-                           fall_idx, if_true, loop_exit, current_loop,
-                           &mut branch_visited, &mut body, depth + 1);
-                    visited.extend(branch_visited.iter().copied());
-                    if !body.is_empty() {
-                        out.push(JsStmt::If { cond: interpreter::negate(cond), then_body: body, else_body: vec![] });
-                    }
-                    out.push(JsStmt::Break);
-                    break;
-                }
-
                 let fall_idx   = b2i.get(&if_false).copied().unwrap_or(blocks.len());
                 let branch_idx = b2i.get(&if_true).copied().unwrap_or(blocks.len());
 
@@ -257,7 +238,11 @@ fn reloop(
                 visited.extend(then_visited.into_iter());
 
                 if !then_body.is_empty() || !else_body.is_empty() {
-                    out.push(JsStmt::If { cond: interpreter::negate(cond), then_body, else_body });
+                    out.push(JsStmt::If {
+                        cond,
+                        then_body: else_body,
+                        else_body: then_body,
+                    });
                 }
 
                 idx = b2i.get(&join).copied().unwrap_or(blocks.len());
@@ -354,20 +339,21 @@ fn find_join_relooper(
     candidates.into_iter().next().unwrap_or(until)
 }
 
-fn block_is_loop_guard(block: &BasicBlock, header: i32) -> Option<JsExpr> {
+fn block_is_loop_guard(
+    block: &BasicBlock,
+    loop_end: i32,
+) -> Option<JsExpr> {
     match &block.term {
         Terminator::CondGoto { cond, if_true, if_false } => {
-            if *if_false > block.offset && *if_true <= header {
-                return Some(interpreter::negate(cond.clone()));
-            }
+            let true_inside = *if_true < loop_end;
+            let false_inside = *if_false < loop_end;
 
-            if *if_true > block.offset && *if_false <= header {
-                return Some(cond.clone());
+            match (true_inside, false_inside) {
+                (true, false) => Some(cond.clone()),
+                (false, true) => Some(interpreter::negate(cond.clone())),
+                _ => None,
             }
-
-            None
         }
-
         _ => None,
     }
 }
@@ -387,4 +373,50 @@ fn recover_loop_condition(body: &[JsStmt]) -> Option<(JsExpr, usize)> {
     }
 
     None
+}
+
+fn strip_double_negation(expr: JsExpr) -> JsExpr {
+    match expr {
+        JsExpr::UnaryOp { op, expr }
+        if op == "!" =>
+            {
+                match *expr {
+                    JsExpr::UnaryOp { op: inner_op, expr: inner_expr }
+                    if inner_op == "!" =>
+                        {
+                            strip_double_negation(*inner_expr)
+                        }
+
+                    other => JsExpr::UnaryOp {
+                        op,
+                        expr: Box::new(strip_double_negation(other)),
+                    },
+                }
+            }
+
+        other => other,
+    }
+}
+
+fn resolve_loop_condition(
+    block: &BasicBlock,
+    cond: JsExpr,
+) -> (JsExpr, Option<usize>) {
+    let cond = strip_double_negation(cond);
+
+    match cond {
+        JsExpr::Reg(r) => {
+            for (i, stmt) in block.stmts.iter().enumerate().rev() {
+                if let JsStmt::Assign { reg, expr } = stmt {
+                    if *reg == r {
+                        return (expr.clone(), Some(i));
+                    }
+                }
+            }
+
+            (JsExpr::Reg(r), None)
+        }
+
+        other => (other, None),
+    }
 }

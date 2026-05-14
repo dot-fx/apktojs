@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use crate::extensions::tachiyomi_loader::translator::dalvik::insn::{DecodedInsn, Insn};
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::ctx::LiftCtx;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{reloop, JsExpr, JsStmt, TaggedStmt};
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::cleanup::elide_redundant_assigns;
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::cleanup::{cleanup, elide_redundant_assigns};
 
 pub fn lift(
     insns:          &[Insn],
@@ -68,6 +68,6 @@ pub fn lift(
 
     let tagged = ctx.tagged;
     let stmts  = reloop::structure_cfg(tagged);
-    let stmts  = elide_redundant_assigns(stmts);
+    let stmts = cleanup(stmts);
     (stmts, ctx.warnings)
 }
