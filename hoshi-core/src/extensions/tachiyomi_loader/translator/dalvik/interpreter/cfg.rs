@@ -32,14 +32,32 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
 
     let mut leaders: HashSet<i32> = HashSet::new();
     leaders.insert(tagged[0].offset);
+    let normalize_target = |target: i32| -> i32 {
+        tagged.iter()
+            .find(|ts| ts.offset >= target)
+            .map(|ts| ts.offset)
+            .unwrap_or(target)
+    };
 
-    for ts in &tagged {
+    for (i, ts) in tagged.iter().enumerate() {
         match &ts.stmt {
-            JsStmt::Goto(t) => { leaders.insert(*t); }
-            JsStmt::CondGoto { target, .. } => { leaders.insert(*target); }
+            JsStmt::Goto(t) => {
+                leaders.insert(normalize_target(*t));
+                if let Some(next) = tagged.get(i + 1) {
+                    leaders.insert(next.offset);
+                }
+            }
+            JsStmt::CondGoto { target, .. } => {
+                leaders.insert(normalize_target(*target));
+                if let Some(next) = tagged.get(i + 1) {
+                    leaders.insert(next.offset);
+                }
+            }
             JsStmt::Switch { cases, .. } => {
                 for (_, body) in cases {
-                    if let Some(JsStmt::Goto(t)) = body.first() { leaders.insert(*t); }
+                    if let Some(JsStmt::Goto(t)) = body.first() {
+                        leaders.insert(normalize_target(*t));
+                    }
                 }
             }
             _ => {}
@@ -72,7 +90,7 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
                 blocks.push(BasicBlock {
                     offset: cur_off,
                     stmts:  std::mem::take(&mut cur_stmts),
-                    term:   Terminator::Goto(*t),
+                    term: Terminator::Goto(normalize_target(*t)),
                 });
                 cur_off = snap(i + 1);
             }
@@ -84,7 +102,7 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
                     stmts:  std::mem::take(&mut cur_stmts),
                     term:   Terminator::CondGoto {
                         cond:     cond.clone(),
-                        if_true:  *target,
+                        if_true: normalize_target(*target),
                         if_false,
                     },
                 });
@@ -111,7 +129,11 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
                 let fall_off = snap(i + 1);
                 let resolved: Vec<(i32, i32)> = cases.iter().map(|(key, body)| {
                     let target = body.iter().find_map(|s| {
-                        if let JsStmt::Goto(t) = s { Some(*t) } else { None }
+                        if let JsStmt::Goto(t) = s {
+                            Some(normalize_target(*t))
+                        } else {
+                            None
+                        }
                     }).unwrap_or(fall_off);
                     (*key, target)
                 }).collect();
@@ -206,19 +228,38 @@ pub fn find_switch_end(
     best.min(until)
 }
 
-pub fn find_loop_end(blocks: &[BasicBlock], start_idx: usize, header: i32) -> i32 {
-    let mut end = i32::MAX;
-    for b in &blocks[start_idx..] {
-        let is_back_edge = match &b.term {
-            Terminator::Goto(t)                              => *t == header,
-            Terminator::CondGoto { if_true, if_false, .. }  => *if_true == header || *if_false == header,
-            _ => false,
-        };
-        if is_back_edge {
-            if let Some(next) = blocks.iter().find(|bl| bl.offset > b.offset) {
-                end = end.min(next.offset);
+pub fn find_loop_end(
+    blocks: &[BasicBlock],
+    start_idx: usize,
+    header: i32,
+) -> i32 {
+    let mut max_back_idx = start_idx;
+    let mut found_backedge = false;
+
+    for (i, b) in blocks.iter().enumerate().skip(start_idx) {
+        if block_successors(b).contains(&header) {
+            max_back_idx = i;
+            found_backedge = true;
+        }
+    }
+
+    if !found_backedge {
+        return i32::MAX;
+    }
+
+    let layout_next = blocks.get(max_back_idx + 1).map(|b| b.offset).unwrap_or(i32::MAX);
+
+    if let Some(header_block) = blocks.get(start_idx) {
+        if let Terminator::CondGoto { if_true, if_false, .. } = &header_block.term {
+            let max_body_offset = blocks[max_back_idx].offset;
+            if *if_true > max_body_offset {
+                return *if_true;
+            }
+            if *if_false > max_body_offset {
+                return *if_false;
             }
         }
     }
-    end
+
+    layout_next
 }

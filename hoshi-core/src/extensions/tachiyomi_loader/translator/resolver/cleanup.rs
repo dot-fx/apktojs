@@ -58,7 +58,6 @@ pub fn collapse_companion_chains(js: &str) -> String {
             .strip_suffix(';')
             .and_then(|s| {
                 let s = s.strip_prefix("let ").unwrap_or(s);
-                // s is now: "vN = Foo.Companion"
                 let (lhs, rhs) = s.split_once(" = ")?;
                 let class = rhs.strip_suffix(".Companion")?;
                 Some((lhs.trim(), class))

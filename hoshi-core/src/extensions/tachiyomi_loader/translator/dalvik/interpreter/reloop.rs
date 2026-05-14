@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{cfg, BasicBlock, JsStmt, TaggedStmt, Terminator};
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{cfg, BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
 
 const MAX_DEPTH: usize = 64;
+
+fn next_block_offset(blocks: &[BasicBlock], b2i: &HashMap<i32, usize>, idx: usize) -> i32 {
+    blocks.get(idx + 1).map(|b| b.offset).unwrap_or(i32::MAX)
+}
 
 pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
     let tagged: Vec<TaggedStmt> = tagged
@@ -33,7 +37,6 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
         }
         h
     };
-
     let b2i: HashMap<i32, usize> = blocks.iter().enumerate()
         .map(|(i, b)| (b.offset, i))
         .collect();
@@ -47,6 +50,7 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
         &preds,
         0,
         i32::MAX,
+        None,
         None,
         &mut HashSet::new(),
         &mut out,
@@ -65,10 +69,11 @@ fn reloop(
     start_idx:    usize,
     until:        i32,
     loop_exit:    Option<i32>,
+    current_loop: Option<i32>,
     visited:      &mut HashSet<usize>,
     out:          &mut Vec<JsStmt>,
     depth:        usize,
-) {
+){
     if depth > MAX_DEPTH { return; }
 
     let mut idx = start_idx;
@@ -79,24 +84,72 @@ fn reloop(
         if block.offset >= until { break; }
         if visited.contains(&idx) { break; }
 
-        if loop_headers.contains(&block.offset) && block.offset >= blocks[start_idx].offset {
+        if loop_headers.contains(&block.offset)
+            && Some(block.offset) != current_loop
+        {
             let loop_end = cfg::find_loop_end(blocks, idx, block.offset);
 
-            visited.insert(idx);
-            let mut body = Vec::new();
-            reloop(blocks, b2i, loop_headers, preds,
-                   idx, loop_end, Some(loop_end),
-                   visited, &mut body, depth + 1);
-
-            if matches!(body.last(), Some(JsStmt::Continue)) {
-                let prev_is_if = body.len() >= 2 &&
-                    matches!(body[body.len() - 2], JsStmt::If { .. });
-                if !prev_is_if {
-                    body.pop();
+            for bi in idx..blocks.len() {
+                let b = &blocks[bi];
+                if b.offset >= loop_end {
+                    break;
                 }
             }
 
-            out.push(JsStmt::Loop { body });
+            let mut loop_visited = HashSet::new();
+            loop_visited.insert(idx);
+
+            let header_cond = block_is_loop_guard(block, block.offset);
+
+            let mut body = Vec::new();
+            body.extend(block.stmts.iter().cloned());
+
+            // --- FIX: Preserving the loop header exit condition ---
+            if let Terminator::CondGoto { cond, if_true, if_false } = &block.term {
+                if *if_true >= loop_end {
+                    body.push(JsStmt::If {
+                        cond: cond.clone(),
+                        then_body: vec![JsStmt::Break],
+                        else_body: vec![],
+                    });
+                } else if *if_false >= loop_end {
+                    body.push(JsStmt::If {
+                        cond: interpreter::negate(cond.clone()),
+                        then_body: vec![JsStmt::Break],
+                        else_body: vec![],
+                    });
+                }
+            }
+            // ------------------------------------------------------
+
+            reloop(
+                blocks,
+                b2i,
+                loop_headers,
+                preds,
+                idx + 1,
+                loop_end,
+                Some(loop_end),
+                Some(block.offset),
+                &mut loop_visited,
+                &mut body,
+                depth + 1,
+            );
+
+            if matches!(body.last(), Some(JsStmt::Continue)) {
+                body.pop();
+            }
+
+            if let Some(cond) = header_cond {
+                out.push(JsStmt::While { cond, body });
+            } else if let Some((cond, break_idx)) = recover_loop_condition(&body) {
+                let mut body = body;
+                body.remove(break_idx);
+
+                out.push(JsStmt::DoWhile { cond, body });
+            } else {
+                out.push(JsStmt::Loop { body });
+            }
 
             idx = b2i.get(&loop_end).copied().unwrap_or(blocks.len());
             continue;
@@ -116,7 +169,7 @@ fn reloop(
             }
             Terminator::Goto(t) => {
                 let t = *t;
-                if loop_headers.contains(&t) && t <= block.offset {
+                if Some(t) == current_loop {
                     out.push(JsStmt::Continue);
                     break;
                 }
@@ -135,7 +188,29 @@ fn reloop(
             Terminator::CondGoto { cond, if_true, if_false } => {
                 let (cond, if_true, if_false) = (cond.clone(), *if_true, *if_false);
 
-                if loop_headers.contains(&if_true) && if_true <= block.offset {
+                if Some(if_true) == loop_exit && if_false < if_true{
+                    out.push(JsStmt::If {
+                        cond,
+                        then_body: vec![JsStmt::Break],
+                        else_body: vec![],
+                    });
+
+                    idx = b2i.get(&if_false).copied().unwrap_or(blocks.len());
+                    continue;
+                }
+
+                if Some(if_false) == loop_exit && if_true < if_false {
+                    out.push(JsStmt::If {
+                        cond: interpreter::negate(cond),
+                        then_body: vec![JsStmt::Break],
+                        else_body: vec![],
+                    });
+
+                    idx = b2i.get(&if_true).copied().unwrap_or(blocks.len());
+                    continue;
+                }
+
+                if Some(if_true) == current_loop {
                     out.push(JsStmt::If {
                         cond: interpreter::negate(cond),
                         then_body: vec![JsStmt::Break],
@@ -150,7 +225,7 @@ fn reloop(
                     let mut body = Vec::new();
                     let mut branch_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
-                           fall_idx, if_true, loop_exit,
+                           fall_idx, if_true, loop_exit, current_loop,
                            &mut branch_visited, &mut body, depth + 1);
                     visited.extend(branch_visited.iter().copied());
                     if !body.is_empty() {
@@ -159,23 +234,23 @@ fn reloop(
                     out.push(JsStmt::Break);
                     break;
                 }
-                
+
                 let fall_idx   = b2i.get(&if_false).copied().unwrap_or(blocks.len());
                 let branch_idx = b2i.get(&if_true).copied().unwrap_or(blocks.len());
-                
+
                 let join = find_join_relooper(blocks, b2i, fall_idx, branch_idx, until, block.offset);
 
                 let mut then_body = Vec::new();
                 let mut then_visited = visited.clone();
                 reloop(blocks, b2i, loop_headers, preds,
-                       fall_idx, join, loop_exit,
+                       fall_idx, join, loop_exit, current_loop,
                        &mut then_visited, &mut then_body, depth + 1);
 
                 let mut else_body = Vec::new();
-                if branch_idx < blocks.len() && blocks[branch_idx].offset < join {
+                if branch_idx < blocks.len() {
                     let mut else_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
-                           branch_idx, join, loop_exit,
+                           branch_idx, join, loop_exit, current_loop,
                            &mut else_visited, &mut else_body, depth + 1);
                     visited.extend(else_visited.into_iter());
                 }
@@ -214,7 +289,7 @@ fn reloop(
                     let mut case_body = Vec::new();
                     let mut case_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
-                           case_start, stop, loop_exit,
+                           case_start, stop, loop_exit, current_loop,
                            &mut case_visited, &mut case_body, depth + 1);
                     visited.extend(case_visited.into_iter());
 
@@ -230,8 +305,6 @@ fn reloop(
                 continue;
             }
         }
-
-        idx += 1;
     }
 }
 
@@ -255,6 +328,14 @@ fn find_join_relooper(
                     if let Some(&ni) = b2i.get(&t) {
                         stack.push(ni);
                     }
+                } else if t <= b.offset {
+                    let header_idx = b2i.get(&t).copied().unwrap_or(blocks.len());
+                    let loop_exit_off = cfg::find_loop_end(blocks, header_idx, t);
+                    if loop_exit_off < until {
+                        if let Some(&ei) = b2i.get(&loop_exit_off) {
+                            stack.push(ei);
+                        }
+                    }
                 }
             }
         }
@@ -271,4 +352,39 @@ fn find_join_relooper(
         .collect();
     candidates.sort_unstable();
     candidates.into_iter().next().unwrap_or(until)
+}
+
+fn block_is_loop_guard(block: &BasicBlock, header: i32) -> Option<JsExpr> {
+    match &block.term {
+        Terminator::CondGoto { cond, if_true, if_false } => {
+            if *if_false > block.offset && *if_true <= header {
+                return Some(interpreter::negate(cond.clone()));
+            }
+
+            if *if_true > block.offset && *if_false <= header {
+                return Some(cond.clone());
+            }
+
+            None
+        }
+
+        _ => None,
+    }
+}
+
+fn recover_loop_condition(body: &[JsStmt]) -> Option<(JsExpr, usize)> {
+    if let Some((last_idx, stmt)) = body.iter().enumerate().last() {
+        match stmt {
+            JsStmt::If { cond, then_body, else_body }
+            if else_body.is_empty()
+                && then_body.len() == 1
+                && matches!(then_body[0], JsStmt::Break)
+            => {
+                return Some((interpreter::negate(cond.clone()), last_idx));
+            }
+            _ => {}
+        }
+    }
+
+    None
 }

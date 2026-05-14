@@ -1,3 +1,4 @@
+use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn::Throw;
 use std::collections::HashSet;
 use crate::extensions::tachiyomi_loader::{ApkMeta, WalkedSource};
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
@@ -53,7 +54,9 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
         let is_terminal = matches!(
             stmt,
             JsStmt::Return(_) | JsStmt::Break | JsStmt::Continue
-        ) || matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"));
+        ) || matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"))
+            || matches!(stmt, JsStmt::Expr(JsExpr::StaticCall { method, .. }) if method == "throw")
+            || matches!(stmt, JsStmt::Throw);
 
         let stmt = match stmt {
             JsStmt::If {
@@ -203,14 +206,35 @@ fn render_stmts(
                 lines.push(format!("{}}}", pad));
             }
 
-            // These should be gone after structure_cfg, but keep a fallback.
             JsStmt::CondGoto { cond, target } => {
                 lines.push(format!("{}/* if ({}) goto {} */",
                                    pad, expr_to_js(cond), target));
             }
 
+            JsStmt::While { cond, body } => {
+                lines.push(format!(
+                    "{}while ({}) {{",
+                    pad,
+                    simplify_cond(cond),
+                ));
+
+                render_stmts(body, indent + 2, declared, lines);
+
+                lines.push(format!("{}}}", pad));
+            }
+
+            JsStmt::DoWhile { body, cond } => {
+                lines.push(format!("{}do {{", pad));
+                render_stmts(body, indent + 2, declared, lines);
+                lines.push(format!("{}}} while ({});", pad, simplify_cond(cond)));
+            }
+
             JsStmt::Goto(target) => {
                 lines.push(format!("{}/* goto {} */", pad, target));
+            }
+
+            JsStmt::Throw => {
+                lines.push(format!("{}throw;", pad));
             }
         }
     }

@@ -28,11 +28,20 @@ pub enum JsStmt {
     If     { cond: JsExpr, then_body: Vec<JsStmt>, else_body: Vec<JsStmt> },
     Loop   { body: Vec<JsStmt> },
     Switch { expr: JsExpr, cases: Vec<(i32, Vec<JsStmt>)> },
+    While {
+        cond: JsExpr,
+        body: Vec<JsStmt>,
+    },
+    DoWhile {
+        body: Vec<JsStmt>,
+        cond: JsExpr,
+    },
     Break,
     Continue,
     Comment(String),
     CondGoto { cond: JsExpr, target: i32 },
     Goto(i32),
+    Throw,
 }
 
 #[derive(Debug, Clone)]
