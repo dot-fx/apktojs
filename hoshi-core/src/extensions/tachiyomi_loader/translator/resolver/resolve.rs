@@ -1,0 +1,113 @@
+use regex::Regex;
+use crate::extensions::tachiyomi_loader::ExtractedDex;
+use crate::extensions::tachiyomi_loader::translator::resolver::cleanup::remove_duplicate_stmts;
+use crate::extensions::tachiyomi_loader::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
+use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
+use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+
+pub fn resolve(raw_js: &str, extracted: &ExtractedDex) -> String {
+    let pool = Pool::build(&extracted.dex_files);
+    let mut js = raw_js.to_string();
+
+    js = apply_well_known(&js);
+    js = resolve_strings(&js, &pool);
+    js = resolve_static_methods(&js, &pool);
+    js = resolve_fields(&js, &pool);
+    js = resolve_sfields(&js, &pool);
+    js = resolve_methods(&js, &pool);
+    js = resolve_types(&js, &pool);
+    js = remove_duplicate_stmts(&js);
+
+    js
+}
+
+fn resolve_strings(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"/\* string#(\d+) \*/").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
+        match lookup_string(pool, idx) {
+            Some(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+            None    => format!("/* string#{} */", idx),
+        }
+    }).into_owned()
+}
+
+fn resolve_methods(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"_meth(\d+)\(").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
+        match lookup_method(pool, idx) {
+            Some(m) => {
+                if m.method_name == "<init>" || m.method_name.starts_with('<') {
+                    return "/* ctor */(".to_string();
+                }
+                let name = m.js_name.as_deref().unwrap_or(&m.method_name);
+                format!("{}(", name)
+            }
+            None => format!("_meth{}(", idx),
+        }
+    }).into_owned()
+}
+
+fn resolve_fields(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"_field(\d+)_(\d+)").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let shard: usize = caps[1].parse().unwrap_or(0);
+        let idx: u32     = caps[2].parse().unwrap_or(u32::MAX);
+        match pool.fields.get(&(shard, idx)) {
+            Some(f) => f.field_name.clone(),
+            None    => format!("_field{}_{}", shard, idx),
+        }
+    }).into_owned()
+}
+
+fn resolve_types(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"/\* (?:type|class)#(\d+) \*/").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
+        match lookup_type(pool, idx)  {
+            Some(t) => kotlin_class_to_js(t),
+            None    => format!("/* type#{} */", idx),
+        }
+    }).into_owned()
+}
+
+fn resolve_static_methods(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"/\* static_meth(\d+) \*/").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
+        match lookup_method(pool, idx) {
+            Some(m) => {
+                if let Some(js_name) = &m.js_name {
+                    return js_name.clone();
+                }
+                match (m.class_name.split('.').last().unwrap_or(""), m.method_name.as_str()) {
+                    ("StringsKt", "trim")      => "/* call as: str.trim() */trim".into(),
+                    ("StringsKt", "append")    => "append".into(),
+                    ("StringsKt", "isBlank")   => "/* str */.isBlank()".into(),
+                    ("StringsKt", "trimStart") => "/* str */.trimStart()".into(),
+                    ("StringsKt", "trimEnd")   => "/* str */.trimEnd()".into(),
+                    _ => {
+                        let simple = m.class_name.split('.').last().unwrap_or(&m.class_name);
+                        format!("{}.{}", simple, m.method_name)
+                    }
+                }
+            }
+            None => format!("/* static_meth{} */", idx),
+        }
+    }).into_owned()
+}
+
+fn resolve_sfields(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(r"/\* static_field#(\d+) \*/").unwrap();
+    re.replace_all(js, |caps: &regex::Captures| {
+        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
+        match lookup_field(pool, idx) {
+            Some(f) => {
+                let simple = f.class_name.split('.').last().unwrap_or(&f.class_name);
+                format!("{}.{}", simple, f.field_name)
+            }
+            None => format!("/* static_field#{} */", idx),
+        }
+    }).into_owned()
+}

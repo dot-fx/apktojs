@@ -1,8 +1,7 @@
 use std::collections::HashSet;
-
-use crate::extensions::tachiyomi_loader::translator::interpreter::{JsStmt, JsExpr, expr_to_js};
-
 use crate::extensions::tachiyomi_loader::{ApkMeta, WalkedSource};
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::tachiyomi_loader::translator::emit::params::method_params;
 
 pub struct JsMethod {
     pub name: String,
@@ -28,7 +27,6 @@ pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, method_name: &str) -> String
     };
 
     lines.iter().map(|line| {
-        // Match lines like `    let vN = arguments[i];`
         if let Some(rest) = line.trim_start().strip_prefix("let v") {
             if let Some(eq_pos) = rest.find(" = arguments[") {
                 let reg_str = &rest[..eq_pos];
@@ -58,9 +56,14 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
         ) || matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"));
 
         let stmt = match stmt {
-            JsStmt::If { cond, body } => JsStmt::If {
+            JsStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => JsStmt::If {
                 cond: cond.clone(),
-                body: strip_dead_code(body),
+                then_body: strip_dead_code(then_body),
+                else_body: strip_dead_code(else_body),
             },
             JsStmt::Loop { body } => JsStmt::Loop {
                 body: strip_dead_code(body),
@@ -75,13 +78,12 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
         };
 
         out.push(stmt);
-        if is_terminal { break; } // everything after is unreachable
+        if is_terminal { break; }
     }
     out
 }
 
 fn simplify_cond(expr: &JsExpr) -> String {
-    // (!(!x)) → x
     if let JsExpr::UnaryOp { op: "!", expr: inner } = expr {
         if let JsExpr::UnaryOp { op: "!", expr: innermost } = inner.as_ref() {
             return expr_to_js(innermost);
@@ -130,10 +132,24 @@ fn render_stmts(
                 lines.push(format!("{}return {};", pad, expr_to_js(e)));
             }
 
-            JsStmt::If { cond, body } => {
+            JsStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
                 lines.push(format!("{}if ({}) {{", pad, simplify_cond(cond)));
-                render_stmts(body, indent + 2, declared, lines);
-                lines.push(format!("{}}}", pad));
+
+                render_stmts(then_body, indent + 2, declared, lines);
+
+                if else_body.is_empty() {
+                    lines.push(format!("{}}}", pad));
+                } else {
+                    lines.push(format!("{}}} else {{", pad));
+
+                    render_stmts(else_body, indent + 2, declared, lines);
+
+                    lines.push(format!("{}}}", pad));
+                }
             }
 
             JsStmt::Loop { body } => {
@@ -166,14 +182,21 @@ fn render_stmts(
                     }
 
                     for k in i..j {
-                        if k < j - 1 {
-                            lines.push(format!("{}  case {}:", pad, cases[k].0)); // no brace
+                        if k == i {
+                            lines.push(format!("{}  case {}: {{", pad, cases[k].0));
                         } else {
-                            lines.push(format!("{}  case {}: {{", pad, cases[k].0)); // brace on last
+                            lines.push(format!("{}  case {}:", pad, cases[k].0));
                         }
                     }
                     render_stmts(body, indent + 4, declared, lines);
-                    lines.push(format!("{}    break;", pad));
+                    let needs_break = !matches!(body.last(),
+                        Some(JsStmt::Break | JsStmt::Return(_) | JsStmt::Continue)
+                    ) && !matches!(body.last(),
+                        Some(JsStmt::Expr(JsExpr::Raw(s))) if s.starts_with("throw")
+                    );
+                    if needs_break {
+                        lines.push(format!("{}    break;", pad));
+                    }
                     lines.push(format!("{}  }}", pad));
                     i = j;
                 }
@@ -246,31 +269,49 @@ pub fn render_class(
     out
 }
 
-fn method_params(method: &str) -> &'static str {
-    match method {
-        "popularMangaRequest"          => "page",
-        "popularMangaParse"            => "response",
-        "latestUpdatesRequest"         => "page",
-        "latestUpdatesParse"           => "response",
-        "searchMangaRequest"           => "page, query, filters",
-        "searchMangaParse"             => "response",
-        "mangaDetailsParse"            => "response",
-        "chapterListRequest"           => "manga",
-        "chapterListParse"             => "response",
-        "pageListParse"                => "response",
-        "imageUrlParse"                => "response",
-        "getFilterList"                => "",
-        "popularMangaSelector"         => "",
-        "popularMangaNextPageSelector" => "",
-        "popularMangaFromElement"      => "element",
-        "latestUpdatesSelector"        => "",
-        "latestUpdatesNextPageSelector"=> "",
-        "latestUpdatesFromElement"     => "element",
-        "searchMangaSelector"          => "",
-        "searchMangaNextPageSelector"  => "",
-        "searchMangaFromElement"       => "element",
-        "chapterListSelector"          => "",
-        "chapterFromElement"           => "element",
-        _                              => "...args",
+pub fn expr_to_js(expr: &JsExpr) -> String {
+    match expr {
+        JsExpr::Null        => "null".into(),
+        JsExpr::Bool(b)     => b.to_string(),
+        JsExpr::Int(n)      => n.to_string(),
+        JsExpr::Float(f)    => f.to_string(),
+        JsExpr::Str(s)      => format!("\"{}\"", s.replace('"', "\\\"")),
+        JsExpr::Reg(r)      => format!("v{}", r),
+        JsExpr::This        => "this".into(),
+        JsExpr::Raw(s)      => s.clone(),
+
+        JsExpr::BitMask { expr, mask } => {
+            format!("({} {})", expr_to_js(expr), mask)
+        }
+
+        JsExpr::MethodCall { receiver, method, args } => {
+            let r = expr_to_js(receiver);
+            let a = args.iter().map(expr_to_js).collect::<Vec<_>>().join(", ");
+            format!("{}.{}({})", r, method, a)
+        }
+        JsExpr::StaticCall { class, method, args } => {
+            let a = args.iter().map(expr_to_js).collect::<Vec<_>>().join(", ");
+            if method.is_empty() {
+                format!("{}({})", class, a)
+            } else {
+                format!("{}.{}({})", class, method, a)
+            }
+        }
+        JsExpr::New { class, args } => {
+            let a = args.iter().map(expr_to_js).collect::<Vec<_>>().join(", ");
+            format!("new {}({})", class, a)
+        }
+        JsExpr::FieldGet { receiver, field } => {
+            format!("{}.{}", expr_to_js(receiver), field)
+        }
+        JsExpr::BinOp { op, left, right } => {
+            format!("({} {} {})", expr_to_js(left), op, expr_to_js(right))
+        }
+        JsExpr::UnaryOp { op, expr } => {
+            format!("({}{})", op, expr_to_js(expr))
+        }
+        JsExpr::Index { arr, idx } => {
+            format!("{}[{}]", expr_to_js(arr), expr_to_js(idx))
+        }
     }
 }

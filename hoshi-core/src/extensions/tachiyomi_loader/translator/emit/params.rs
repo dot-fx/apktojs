@@ -1,0 +1,28 @@
+pub fn method_params(method: &str) -> &'static str {
+    match method {
+        "popularMangaRequest"          => "page",
+        "popularMangaParse"            => "response",
+        "latestUpdatesRequest"         => "page",
+        "latestUpdatesParse"           => "response",
+        "searchMangaRequest"           => "page, query, filters",
+        "searchMangaParse"             => "response",
+        "mangaDetailsParse"            => "response",
+        "chapterListRequest"           => "manga",
+        "chapterListParse"             => "response",
+        "pageListParse"                => "response",
+        "imageUrlParse"                => "response",
+        "getFilterList"                => "",
+        "popularMangaSelector"         => "",
+        "popularMangaNextPageSelector" => "",
+        "popularMangaFromElement"      => "element",
+        "latestUpdatesSelector"        => "",
+        "latestUpdatesNextPageSelector"=> "",
+        "latestUpdatesFromElement"     => "element",
+        "searchMangaSelector"          => "",
+        "searchMangaNextPageSelector"  => "",
+        "searchMangaFromElement"       => "element",
+        "chapterListSelector"          => "",
+        "chapterFromElement"           => "element",
+        _                              => "...args",
+    }
+}

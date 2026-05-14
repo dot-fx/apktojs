@@ -2,6 +2,7 @@ use dex::Dex;
 
 use crate::error::CoreError;
 use crate::extensions::tachiyomi_loader::{ApkMeta, ExtractedDex};
+use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn;
 
 /// DEX type descriptor for HttpSource.
 const HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/HttpSource;";
@@ -52,6 +53,7 @@ pub struct WalkedSource {
     pub kind: EntryKind,
     pub methods: Vec<SourceMethod>,
     pub hierarchy: Vec<String>,
+    pub dex_shard: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,8 +78,9 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSou
     let fq_class = resolve_ext_class(&meta.package, &meta.ext_class);
     let descriptor = to_dex_descriptor(&fq_class);
 
-    let (entry_class, shard) = find_class_in_shards(&extracted.dex_files, &descriptor)
-        .ok_or_else(|| WalkError::ClassNotFound(fq_class.clone()))?;
+    let (entry_class, dex_shard, shard) =
+        find_class_in_shards(&extracted.dex_files, &descriptor)
+            .ok_or_else(|| WalkError::ClassNotFound(fq_class.clone()))?;
 
     let kind = detect_kind(&entry_class)?;
 
@@ -104,14 +107,13 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSou
             }
 
             for desc in &source_descriptors {
-                if let Some((src_class, src_shard)) =
+                if let Some((src_class, _, src_shard)) =
                     find_class_in_shards(&extracted.dex_files, desc)
                 {
                     walk_hierarchy(
                         &src_class, src_shard, &extracted.dex_files,
                         &mut hierarchy, &mut methods, &mut seen_names, 0,
                     );
-                    break;
                 }
             }
         }
@@ -121,7 +123,13 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSou
         return Err(WalkError::NotASource(fq_class.clone()));
     }
 
-    Ok(WalkedSource { class_name: fq_class, kind, methods, hierarchy })
+    Ok(WalkedSource {
+        class_name: fq_class,
+        kind,
+        methods,
+        hierarchy,
+        dex_shard,
+    })
 }
 
 fn find_factory_sources(
@@ -129,7 +137,7 @@ fn find_factory_sources(
     shard: &Dex<Vec<u8>>,
     all_shards: &[Dex<Vec<u8>>],
 ) -> Vec<String> {
-    use crate::extensions::tachiyomi_loader::translator::dalvik::{self, Insn};
+    use crate::extensions::tachiyomi_loader::translator::dalvik::{self};
 
     let create_method = factory
         .virtual_methods()
@@ -144,8 +152,8 @@ fn find_factory_sources(
     let insns = dalvik::decode(&insns_raw);
     let mut descriptors = Vec::new();
 
-    for insn in &insns {
-        if let Insn::NewInstance(_, type_idx) = insn {
+    for decoded in &insns {
+        if let Insn::NewInstance(_, type_idx) = &decoded.insn {
             let desc = shard.get_type(*type_idx)
                 .map(|t| t.to_string())
                 .or_else(|_| {
@@ -158,9 +166,12 @@ fn find_factory_sources(
                 })
                 .unwrap_or_default();
 
-            if desc.is_empty() { continue; }
+            if desc.is_empty() {
+                continue;
+            }
 
             let fq = from_dex_descriptor(&desc);
+
             if fq.contains("kanade") || fq.contains("tachiyomi") {
                 if !descriptors.contains(&desc) {
                     descriptors.push(desc);
@@ -193,10 +204,10 @@ fn from_dex_descriptor(desc: &str) -> String {
 fn find_class_in_shards<'a>(
     shards: &'a [Dex<Vec<u8>>],
     descriptor: &str,
-) -> Option<(dex::class::Class, &'a Dex<Vec<u8>>)> {
-    for shard in shards {
+) -> Option<(dex::class::Class, usize, &'a Dex<Vec<u8>>)> {
+    for (idx, shard) in shards.iter().enumerate() {
         if let Ok(Some(class)) = shard.find_class_by_name(descriptor) {
-            return Some((class, shard));
+            return Some((class, idx, shard));
         }
     }
     None
@@ -238,7 +249,7 @@ fn walk_hierarchy(
 
     hierarchy.push(class_name.clone());
 
-    for method in class.virtual_methods() {
+    for method in class.virtual_methods().iter().chain(class.direct_methods().iter()) {
         let name = method.name().to_string();
 
         if !SOURCE_METHODS.contains(&name.as_str()) {
@@ -270,7 +281,7 @@ fn walk_hierarchy(
             )
                 .or_else(|| find_class_in_shards(all_shards, &super_desc));
 
-            if let Some((super_class, super_shard)) = found {
+            if let Some((super_class, _, super_shard)) = found {
                 walk_hierarchy(
                     &super_class,
                     super_shard,
