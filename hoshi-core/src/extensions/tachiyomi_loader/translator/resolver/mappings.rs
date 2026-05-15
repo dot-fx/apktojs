@@ -31,20 +31,20 @@ pub fn well_known_method(class: &str, method: &str) -> Option<String> {
 
 
         // String methods
-        ("String", "format")   => "/* String.format → */ _fmt",
+        ("String", "format") => "_fmt",
         ("String", "trim")     => "trim",
         ("String", "split")    => "split",
         ("String", "contains") => "includes",
-        ("String", "isEmpty")  => "isBlank",
+        ("String", "isEmpty")  => "isEmpty",
         ("String", "replace")  => "replace",
         ("String", "lowercase")=> "toLowerCase",
         ("String", "uppercase")=> "toUpperCase",
 
 
         // JSONObject / JSONArray
-        ("JSONObject", "getString") => "/* json */ getString",
-        ("JSONObject", "getInt")    => "/* json */ getInt",
-        ("JSONObject", "optString") => "/* json */ optString",
+        ("JSONObject", "getString") => "getString",
+        ("JSONObject", "getInt") => "getInt",
+        ("JSONObject", "optString") => "optString",
         ("JSONArray",  "length")    => "length",
         ("JSONArray",  "getJSONObject") => "getJSONObject",
 
@@ -64,21 +64,11 @@ pub fn well_known_method(class: &str, method: &str) -> Option<String> {
 
 
         // Kotlin stdlib
-        ("Regex", "find")       => "match",
-        ("Regex", "findAll")    => "matchAll",
-        ("Regex", "matches")    => "test",
+        ("Regex", "find") => "find",
+        ("Regex", "findAll") => "findAll",
+        ("Regex", "matches") => "matches",
         ("Regex", "containsMatchIn") => "test",
-        ("MatchResult", "groupValues") => "/* groupValues */",
-
-        // Kotlin Collections
-        ("CollectionsKt", "toMutableList") => "Array.from",
-        ("CollectionsKt", "addAll")                  => "push_all",
-        ("CollectionsKt", "collectionSizeOrDefault") => "length",
-
-        // Kotlin I/O & Streams
-        ("CloseableKt",   "closeFinally")            => "_closeFinally",
-        ("JvmStreamsKt",  "decodeFromStream")        => "_decodeFromStream",
-
+        ("MatchResult", "groupValues") => "groupValues",
 
         _ => return None,
     };
@@ -92,7 +82,7 @@ pub fn kotlin_class_to_js(class: &str) -> String {
         "java.lang.Integer"         => "Number".into(),
         "java.lang.Boolean"         => "Boolean".into(),
         "kotlin.collections.ArrayList"
-        | "java.util.ArrayList"     => "Array".into(),
+        | "java.util.ArrayList" => "MutableList".into(),
         "okhttp3.HttpUrl"           => "HttpUrl".into(),
         "okhttp3.Request"         => "Request".into(),
         "okhttp3.FormBody"        => "FormBody".into(),
@@ -101,7 +91,6 @@ pub fn kotlin_class_to_js(class: &str) -> String {
         "eu.kanade.tachiyomi.source.model.Page"   => "Page".into(),
         "eu.kanade.tachiyomi.source.model.MangasPage" => "MangasPage".into(),
         c => {
-            // Return just the simple class name for unknown types
             c.split('.').last().unwrap_or(c).to_string()
         }
     }

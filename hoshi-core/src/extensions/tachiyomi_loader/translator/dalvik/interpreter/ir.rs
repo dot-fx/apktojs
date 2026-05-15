@@ -15,6 +15,8 @@ pub enum JsExpr {
     UnaryOp     { op: &'static str, expr: Box<JsExpr> },
     BitMask     { expr: Box<JsExpr>, mask: &'static str },
     Index       { arr: Box<JsExpr>, idx: Box<JsExpr> },
+    ArrayLiteral(Vec<JsExpr>),
+    StringConcat(Vec<JsExpr>),
     Raw(String),
 }
 

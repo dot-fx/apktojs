@@ -9,7 +9,7 @@ pub struct LiftCtx {
     pub warnings:     Vec<String>,
     pub result:       Option<JsExpr>,
     pub pending_call: Option<(i32, JsExpr)>,
-    pub pending_new:  HashMap<u8, String>,
+    pub pending_new: HashMap<u8, u32>,
     pub method_name:  String,
     pub this_reg:     Option<u8>,
     pub dex_shard:    usize,
@@ -156,10 +156,13 @@ impl LiftCtx {
 
             Insn::InvokeDirect { args, method_idx } => {
                 if let Some(&recv_reg) = args.first() {
-                    if let Some(type_ph) = self.pending_new.remove(&recv_reg) {
+                    if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
                         let ctor_args: Vec<JsExpr> = args.iter().skip(1)
                             .map(|r| self.reg(*r)).collect();
-                        let expr = JsExpr::New { class: type_ph, args: ctor_args };
+                        let expr = JsExpr::New {
+                            class: format!("_type{}_{}", self.dex_shard, type_idx),
+                            args: ctor_args,
+                        };
                         self.result = Some(expr.clone());
                         self.set(recv_reg, expr, off);
                         return;
@@ -206,20 +209,48 @@ impl LiftCtx {
             }
 
             Insn::InvokeDirectRange { first, count, method_idx } => {
-                let args: Vec<JsExpr> = (*first..*first + *count).map(|r| self.reg(r)).collect();
-                let recv      = args.first().cloned().unwrap_or(JsExpr::This);
-                let call_args = if args.len() > 1 { args[1..].to_vec() } else { vec![] };
+                let regs: Vec<u8> = (*first..*first + *count).collect();
+
+                if let Some(&recv_reg) = regs.first() {
+                    if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
+                        let ctor_args: Vec<JsExpr> = regs.iter()
+                            .skip(1)
+                            .map(|r| self.reg(*r))
+                            .collect();
+
+                        let expr = JsExpr::New {
+                            class: format!("_type{}_{}", self.dex_shard, type_idx),
+                            args: ctor_args,
+                        };
+
+                        self.result = Some(expr.clone());
+                        self.set(recv_reg, expr, off);
+                        return;
+                    }
+                }
+
+                let args: Vec<JsExpr> = regs.iter()
+                    .map(|r| self.reg(*r))
+                    .collect();
+
+                let recv = args.first().cloned().unwrap_or(JsExpr::This);
+
+                let call_args =
+                    if args.len() > 1 { args[1..].to_vec() }
+                    else { vec![] };
+
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(recv),
-                    method:   format!("_meth{}", method_idx),
-                    args:     call_args,
+                    method: format!("_meth{}", method_idx),
+                    args: call_args,
                 };
-                self.result       = Some(call.clone());
+
+                self.result = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
             Insn::NewInstance(d, type_idx) => {
-                self.pending_new.insert(*d, format!("/* type#{} */", type_idx));
+                self.pending_new.insert(*d, *type_idx);
             }
 
             Insn::NewArray(d, len_reg, type_idx) => {
@@ -229,11 +260,13 @@ impl LiftCtx {
                 ), off);
             }
 
-            Insn::FilledNewArray { args, type_idx } => {
-                let exprs: Vec<String> = args.iter().map(|r| render::expr_to_js(&self.reg(*r))).collect();
-                self.result = Some(JsExpr::Raw(
-                    format!("[{}] /* type#{} */", exprs.join(", "), type_idx)
-                ));
+            Insn::FilledNewArray { args, .. } => {
+                let exprs: Vec<JsExpr> =
+                    args.iter()
+                        .map(|r| self.reg(*r))
+                        .collect();
+
+                self.result = Some(JsExpr::StringConcat(exprs));
             }
 
             Insn::AGet(d, arr, idx) | Insn::AGetObject(d, arr, idx) => {
@@ -456,15 +489,31 @@ impl LiftCtx {
     }
 
     fn make_virtual_call(&mut self, args: &[u8], method_idx: u32) -> JsExpr {
-        let receiver  = if args.is_empty() { JsExpr::This } else { self.reg(args[0]) };
-        let call_args = args.iter().skip(1).map(|r| self.reg(*r)).collect();
+        let receiver =
+            if args.is_empty() {
+                JsExpr::This
+            } else {
+                self.reg(args[0])
+            };
+
+        let mut call_args: Vec<JsExpr> =
+            args.iter()
+                .skip(1)
+                .map(|r| self.reg(*r))
+                .collect();
+
+        for arg in &mut call_args {
+            if let JsExpr::ArrayLiteral(items) = arg {
+                *arg = JsExpr::StringConcat(items.clone());
+            }
+        }
+
         JsExpr::MethodCall {
             receiver: Box::new(receiver),
-            method:   format!("_meth{}", method_idx),
-            args:     call_args,
+            method: format!("_meth{}", method_idx),
+            args: call_args,
         }
     }
-
     fn binop(&mut self, dst: u8, a: u8, b: u8, op: &'static str, off: i32) {
         let ea = self.reg(a); let eb = self.reg(b);
         self.set(dst, JsExpr::BinOp { op, left: Box::new(ea), right: Box::new(eb) }, off);

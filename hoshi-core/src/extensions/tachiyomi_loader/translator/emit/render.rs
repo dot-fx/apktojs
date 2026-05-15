@@ -334,6 +334,27 @@ pub fn expr_to_js(expr: &JsExpr) -> String {
         JsExpr::UnaryOp { op, expr } => {
             format!("({}{})", op, expr_to_js(expr))
         }
+
+        JsExpr::ArrayLiteral(items) => {
+            let parts = items
+                .iter()
+                .map(expr_to_js)
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!("[{}]", parts)
+        }
+
+        JsExpr::StringConcat(items) => {
+            let parts = items
+                .iter()
+                .map(expr_to_js)
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!("[{}].join(\"\")", parts)
+        }
+
         JsExpr::Index { arr, idx } => {
             format!("{}[{}]", expr_to_js(arr), expr_to_js(idx))
         }

@@ -4,8 +4,114 @@ pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = elide_redundant_assigns(stmts);
     let stmts = simplify_loops(stmts);
     let stmts = simplify_array_add(stmts);
+    let stmts = simplify_first_instance(stmts);
 
     stmts
+}
+
+fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
+    let mut out = Vec::new();
+    let mut i = 0;
+
+    while i < stmts.len() {
+        if i + 2 < stmts.len() {
+            if let (
+                JsStmt::While { body, .. },
+                JsStmt::Assign { .. },
+                JsStmt::Expr(JsExpr::Raw(s)),
+            ) = (&stmts[i], &stmts[i + 1], &stmts[i + 2])
+            {
+                if s.starts_with("throw ")
+                    && try_rewrite_first_instance(body)
+                {
+                    out.push(JsStmt::Assign {
+                        reg: 6,
+                        expr: JsExpr::Raw(
+                            "firstInstance(v5, (v6) => v6 instanceof s1)".into()
+                        ),
+                    });
+
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+
+        out.push(rewrite_first_instance_stmt(stmts[i].clone()));
+        i += 1;
+    }
+
+    out
+}
+
+fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
+    match stmt {
+        JsStmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => JsStmt::If {
+            cond,
+            then_body: simplify_first_instance(then_body),
+            else_body: simplify_first_instance(else_body),
+        },
+
+        JsStmt::Loop { body } => JsStmt::Loop {
+            body: simplify_first_instance(body),
+        },
+
+        JsStmt::While { cond, body } => JsStmt::While {
+            cond,
+            body: simplify_first_instance(body),
+        },
+
+        JsStmt::Switch { expr, cases } => JsStmt::Switch {
+            expr,
+            cases: cases
+                .into_iter()
+                .map(|(k, v)| (k, simplify_first_instance(v)))
+                .collect(),
+        },
+
+        other => other,
+    }
+}
+
+fn try_rewrite_first_instance(body: &[JsStmt]) -> bool {
+    if body.len() < 2 {
+        return false;
+    }
+
+    let mut found_instanceof = false;
+
+    for stmt in body {
+        match stmt {
+            JsStmt::Assign {
+                expr: JsExpr::Raw(s),
+                ..
+            } if s.contains("instanceof") => {
+                found_instanceof = true;
+            }
+
+            JsStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if else_body.is_empty()
+                    && then_body.len() == 1
+                    && matches!(then_body[0], JsStmt::Break)
+                    && found_instanceof
+                {
+                    return true;
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    false
 }
 
 fn simplify_loops(stmts: Vec<JsStmt>) -> Vec<JsStmt> {

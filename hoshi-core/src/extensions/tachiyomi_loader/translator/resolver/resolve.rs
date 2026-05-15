@@ -40,8 +40,8 @@ fn resolve_methods(js: &str, pool: &Pool) -> String {
         let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
         match lookup_method(pool, idx) {
             Some(m) => {
-                if m.method_name == "<init>" || m.method_name.starts_with('<') {
-                    return "/* ctor */(".to_string();
+                if m.method_name.starts_with('<') {
+                    return format!("_meth{}(", idx);
                 }
                 let name = m.js_name.as_deref().unwrap_or(&m.method_name);
                 format!("{}(", name)
@@ -64,12 +64,22 @@ fn resolve_fields(js: &str, pool: &Pool) -> String {
 }
 
 fn resolve_types(js: &str, pool: &Pool) -> String {
-    let re = Regex::new(r"/\* (?:type|class)#(\d+) \*/").unwrap();
+    let re = Regex::new(r"_type(\d+)_(\d+)").unwrap();
+
     re.replace_all(js, |caps: &regex::Captures| {
-        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
-        match lookup_type(pool, idx)  {
-            Some(t) => kotlin_class_to_js(t),
-            None    => format!("/* type#{} */", idx),
+        let shard: usize = caps[1].parse().unwrap_or(0);
+        let idx: u32 = caps[2].parse().unwrap_or(u32::MAX);
+
+        match pool.types.get(&(shard, idx)) {
+            Some(t) => {
+                kotlin_class_to_js(t)
+                    .split('.')
+                    .last()
+                    .unwrap_or(t)
+                    .to_string()
+            }
+
+            None => format!("_type{}_{}", shard, idx),
         }
     }).into_owned()
 }
@@ -84,11 +94,6 @@ fn resolve_static_methods(js: &str, pool: &Pool) -> String {
                     return js_name.clone();
                 }
                 match (m.class_name.split('.').last().unwrap_or(""), m.method_name.as_str()) {
-                    ("StringsKt", "trim")      => "/* call as: str.trim() */trim".into(),
-                    ("StringsKt", "append")    => "append".into(),
-                    ("StringsKt", "isBlank")   => "/* str */.isBlank()".into(),
-                    ("StringsKt", "trimStart") => "/* str */.trimStart()".into(),
-                    ("StringsKt", "trimEnd")   => "/* str */.trimEnd()".into(),
                     _ => {
                         let simple = m.class_name.split('.').last().unwrap_or(&m.class_name);
                         format!("{}.{}", simple, m.method_name)
