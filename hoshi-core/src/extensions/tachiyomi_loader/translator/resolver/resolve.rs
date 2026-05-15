@@ -16,6 +16,7 @@ pub fn resolve(raw_js: &str, extracted: &ExtractedDex) -> String {
     js = resolve_sfields(&js, &pool);
     js = resolve_methods(&js, &pool);
     js = resolve_types(&js, &pool);
+    js = resolve_lambdas(&js, &pool);
     js = remove_getclass_stmts(&js);
     js = remove_serializers_module_stmts(&js);
     js = collapse_companion_chains(&js);
@@ -23,6 +24,55 @@ pub fn resolve(raw_js: &str, extracted: &ExtractedDex) -> String {
 
     js
 }
+
+fn resolve_lambdas(js: &str, pool: &Pool) -> String {
+    let re = Regex::new(
+        r"new\s+([A-Za-z0-9_$.]+)\(([^)]*)\)"
+    ).unwrap();
+
+    re.replace_all(js, |caps: &regex::Captures| {
+
+        let ty = &caps[1];
+        let args = &caps[2];
+
+        let Some(info) = pool.type_info.get(ty) else {
+            return caps[0].to_string();
+        };
+
+        let is_lambda =
+            info.superclass
+                .as_deref()
+                .map(|s| s.contains("kotlin.jvm.internal.Lambda"))
+                .unwrap_or(false)
+                ||
+                info.interfaces.iter().any(|i| {
+                    i.starts_with("kotlin.jvm.functions.Function")
+                });
+
+        if !is_lambda {
+            return caps[0].to_string();
+        }
+
+        // locate invoke()
+        let invoke_name = info.methods.iter()
+            .find(|m| *m == "invoke");
+
+        if invoke_name.is_none() {
+            return caps[0].to_string();
+        }
+
+        format!(
+            "((...args) => {}.invoke({}))",
+            ty,
+            if args.trim().is_empty() {
+                "...args".to_string()
+            } else {
+                format!("{}, ...args", args)
+            }
+        )
+    }).into_owned()
+}
+
 fn resolve_strings(js: &str, pool: &Pool) -> String {
     let re = Regex::new(r"/\* string#(\d+) \*/").unwrap();
     re.replace_all(js, |caps: &regex::Captures| {

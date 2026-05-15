@@ -1,18 +1,26 @@
 use std::collections::HashMap;
+
 use dex::Dex;
-use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{from_dex_type, well_known_method};
+
+use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{
+    from_dex_type,
+    well_known_method,
+};
 
 pub struct Pool {
     pub strings: HashMap<(usize, u32), String>,
     pub methods: HashMap<(usize, u32), MethodInfo>,
-    pub fields:  HashMap<(usize, u32), FieldInfo>,
-    pub types:   HashMap<(usize, u32), String>,
+    pub fields: HashMap<(usize, u32), FieldInfo>,
+    pub types: HashMap<(usize, u32), String>,
+
+    // full class name -> metadata
+    pub type_info: HashMap<String, TypeInfo>,
 }
 
 pub struct MethodInfo {
-    pub class_name:  String,
+    pub class_name: String,
     pub method_name: String,
-    pub js_name:     Option<String>,
+    pub js_name: Option<String>,
 }
 
 pub struct FieldInfo {
@@ -20,69 +28,157 @@ pub struct FieldInfo {
     pub field_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TypeInfo {
+    pub full_name: String,
+    pub simple_name: String,
+
+    pub superclass: Option<String>,
+    pub interfaces: Vec<String>,
+
+    pub methods: Vec<String>,
+}
+
 impl Pool {
     pub fn build(shards: &[Dex<Vec<u8>>]) -> Self {
         let mut strings = HashMap::new();
         let mut methods = HashMap::new();
-        let mut fields  = HashMap::new();
-        let mut types   = HashMap::new();
-
+        let mut fields = HashMap::new();
+        let mut types = HashMap::new();
+        let mut type_info = HashMap::new();
 
         for (shard_idx, shard) in shards.iter().enumerate() {
-            let mut str_idx = 0u32;
-            for s in shard.strings() {
+
+            // ---------------- Strings ----------------
+
+            for (idx, s) in shard.strings().enumerate() {
                 if let Ok(s) = s {
-                    strings.insert((shard_idx, str_idx), s.to_string());
+                    strings.insert((shard_idx, idx as u32), s.to_string());
                 }
-                str_idx += 1;
             }
 
+            // ---------------- Types ----------------
 
-            // Types
             for (idx, t) in shard.types().enumerate() {
                 if let Ok(t) = t {
-                    types.insert((shard_idx, idx as u32), from_dex_type(t.to_string().as_str()));
+                    let name = from_dex_type(t.to_string().as_str());
+
+                    types.insert((shard_idx, idx as u32), name.clone());
+
+                    let simple_name = name
+                        .split('.')
+                        .last()
+                        .unwrap_or(&name)
+                        .to_string();
+
+                    type_info.entry(name.clone()).or_insert(TypeInfo {
+                        full_name: name,
+                        simple_name,
+
+                        superclass: None,
+                        interfaces: vec![],
+
+                        methods: vec![],
+                    });
                 }
             }
 
+            // ---------------- Methods ----------------
 
-            // Methods
-            let mut meth_idx = 0u32;
-            for item in shard.method_ids() {
+            for (meth_idx, item) in shard.method_ids().enumerate() {
                 if let Ok(item) = item {
-                    let class_name = shard.get_type(item.class_idx() as u32)
+
+                    let class_name = shard
+                        .get_type(item.class_idx() as u32)
                         .map(|t| from_dex_type(t.to_string().as_str()))
                         .unwrap_or_default();
-                    let method_name = shard.get_string(item.name_idx())
+
+                    let method_name = shard
+                        .get_string(item.name_idx())
                         .map(|s| s.to_string())
                         .unwrap_or_default();
+
                     let js_name = well_known_method(&class_name, &method_name);
-                    methods.insert((shard_idx, meth_idx), MethodInfo { class_name, method_name, js_name });
+
+                    methods.insert(
+                        (shard_idx, meth_idx as u32),
+                        MethodInfo {
+                            class_name: class_name.clone(),
+                            method_name: method_name.clone(),
+                            js_name,
+                        },
+                    );
+
+                    if let Some(info) = type_info.get_mut(&class_name) {
+                        info.methods.push(method_name);
+                    }
                 }
-                meth_idx += 1;
             }
 
-            // Fields
-            let mut field_idx = 0u32;
-            for item in shard.field_ids() {
+            // ---------------- Fields ----------------
+
+            for (field_idx, item) in shard.field_ids().enumerate() {
                 if let Ok(item) = item {
-                    let class_name = shard.get_type(*item.class_idx() as u32)
+
+                    let class_name = shard
+                        .get_type(*item.class_idx() as u32)
                         .map(|t| from_dex_type(t.to_string().as_str()))
                         .unwrap_or_default();
-                    let field_name = shard.get_string(*item.name_idx())
+
+                    let field_name = shard
+                        .get_string(*item.name_idx())
                         .map(|s| s.to_string())
                         .unwrap_or_default();
-                    fields.insert((shard_idx, field_idx as u32), FieldInfo { class_name, field_name });
+
+                    fields.insert(
+                        (shard_idx, field_idx as u32),
+                        FieldInfo {
+                            class_name,
+                            field_name,
+                        },
+                    );
                 }
-                field_idx += 1;
+            }
+
+            // ---------------- Class defs ----------------
+
+            for class in shard.classes() {
+                if let Ok(class) = class {
+
+                    let class_name = from_dex_type(class.jtype().to_string().as_str());
+
+                    if let Some(info) = type_info.get_mut(&class_name) {
+
+                        // superclass
+                        info.superclass = class
+                            .super_class()
+                            .and_then(|id| shard.get_type(id).ok())
+                            .map(|t| from_dex_type(t.to_string().as_str()));
+
+                        // interfaces
+                        info.interfaces = class
+                            .interfaces()
+                            .iter()
+                            .map(|t| from_dex_type(t.to_string().as_str()))
+                            .collect();
+
+                        // methods
+                        info.methods.extend(
+                            class.methods().map(|m| {
+                                m.name().to_string()
+                            })
+                        );
+                    }
+                }
             }
         }
 
-
-        for s in 0..shards.len() {
-            let max_idx = fields.keys().filter(|(si, _)| *si == s).map(|(_, i)| *i).max();
-            eprintln!("Shard {} max field idx = {:?}", s, max_idx);
+        Pool {
+            strings,
+            methods,
+            fields,
+            types,
+            type_info,
         }
-        Pool { strings, methods, fields, types }
     }
 }
