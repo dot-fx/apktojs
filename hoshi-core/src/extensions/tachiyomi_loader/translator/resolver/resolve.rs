@@ -1,12 +1,10 @@
 use regex::Regex;
-use crate::extensions::tachiyomi_loader::ExtractedDex;
 use crate::extensions::tachiyomi_loader::translator::resolver::cleanup::{collapse_companion_chains, remove_duplicate_stmts, remove_serializers_module_stmts};
 use crate::extensions::tachiyomi_loader::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
 use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
 use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
-pub fn resolve(raw_js: &str, extracted: &ExtractedDex) -> String {
-    let pool = Pool::build(&extracted.dex_files);
+pub fn resolve(raw_js: &str, pool: &Pool) -> String {
     let mut js = raw_js.to_string();
 
     js = apply_well_known(&js);

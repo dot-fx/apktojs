@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
 use crate::extensions::tachiyomi_loader::translator::emit::render;
+use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
-pub struct LiftCtx {
+pub struct LiftCtx<'a> {
     pub regs:         HashMap<u8, JsExpr>,
     pub tagged:       Vec<TaggedStmt>,
     pub warnings:     Vec<String>,
@@ -13,9 +14,11 @@ pub struct LiftCtx {
     pub method_name:  String,
     pub this_reg:     Option<u8>,
     pub dex_shard:    usize,
+
+    pub pool: &'a Pool,
 }
 
-impl LiftCtx {
+impl<'a> LiftCtx<'a> {
     fn reg(&self, r: u8) -> JsExpr {
         if Some(r) == self.this_reg { return JsExpr::This; }
         self.regs.get(&r).cloned().unwrap_or(JsExpr::Reg(r))
@@ -23,9 +26,16 @@ impl LiftCtx {
 
     fn set(&mut self, r: u8, expr: JsExpr, offset: i32) {
         if let JsExpr::Reg(s) = &expr {
-            if *s == r { return; }
+            if *s == r {
+                return;
+            }
         }
-        self.push(offset, JsStmt::Assign { reg: r, expr });
+
+        self.push(offset, JsStmt::Assign {
+            reg: r,
+            expr,
+        });
+
         self.regs.insert(r, JsExpr::Reg(r));
     }
 
@@ -47,8 +57,45 @@ impl LiftCtx {
         }
     }
 
+    fn string_ref(&self, idx: u32) -> String {
+        self.pool
+            .strings
+            .get(&(self.dex_shard, idx))
+            .cloned()
+            .unwrap_or_else(|| format!("string_{}", idx))
+    }
+
+    fn type_ref(&self, idx: u32) -> String {
+        self.pool
+            .types
+            .get(&(self.dex_shard, idx))
+            .map(|s| {
+                s.split('.')
+                    .last()
+                    .unwrap_or(s)
+                    .replace('$', "_")
+            })
+            .unwrap_or_else(|| format!("Type{}", idx))
+    }
+
     fn field_ref(&self, fi: u32) -> String {
-        format!("_field{}_{}", self.dex_shard, fi)
+        self.pool
+            .fields
+            .get(&(self.dex_shard, fi))
+            .map(|f| f.field_name.clone())
+            .unwrap_or_else(|| format!("field{}", fi))
+    }
+
+    fn method_ref(&self, mi: u32) -> String {
+        self.pool
+            .methods
+            .get(&(self.dex_shard, mi))
+            .map(|m| {
+                m.js_name
+                    .clone()
+                    .unwrap_or_else(|| m.method_name.clone())
+            })
+            .unwrap_or_else(|| format!("meth{}", mi))
     }
 
     pub fn process(&mut self, insn: &Insn, off: i32) {
@@ -94,11 +141,15 @@ impl LiftCtx {
             Insn::ConstWide32(d, v) => self.set(*d, JsExpr::Int(*v as i64), off),
             Insn::ConstWide(d, v) | Insn::ConstWideHigh16(d, v) => self.set(*d, JsExpr::Int(*v), off),
 
-            Insn::ConstString(d, idx) | Insn::ConstStringJumbo(d, idx) =>
-                self.set(*d, JsExpr::Raw(format!("/* string#{} */", idx)), off),
+            Insn::ConstString(d, idx) | Insn::ConstStringJumbo(d, idx) => {
+                let s = self.string_ref(*idx);
+                self.set(*d, JsExpr::Str(s), off);
+            }
 
-            Insn::ConstClass(d, idx) =>
-                self.set(*d, JsExpr::Raw(format!("/* class#{} */", idx)), off),
+            Insn::ConstClass(d, idx) => {
+                let ty = self.type_ref(*idx);
+                self.set(*d, JsExpr::Raw(ty), off);
+            }
 
             Insn::ConstNull(d) =>
                 self.set(*d, JsExpr::Null, off),
@@ -127,7 +178,13 @@ impl LiftCtx {
             }
 
             Insn::SGet(d, fi) | Insn::SGetObject(d, fi) | Insn::SGetBoolean(d, fi) => {
-                self.set(*d, JsExpr::Raw(format!("/* static_field#{} */", fi)), off);
+                let field = self.field_ref(*fi);
+
+                self.set(
+                    *d,
+                    JsExpr::Raw(format!("this.constructor.{}", field)),
+                    off
+                );
             }
 
             Insn::SPut(src, fi) | Insn::SPutObject(src, fi) => {
@@ -160,7 +217,7 @@ impl LiftCtx {
                         let ctor_args: Vec<JsExpr> = args.iter().skip(1)
                             .map(|r| self.reg(*r)).collect();
                         let expr = JsExpr::New {
-                            class: format!("_type{}_{}", self.dex_shard, type_idx),
+                            class: self.type_ref(type_idx),
                             args: ctor_args,
                         };
                         self.result = Some(expr.clone());
@@ -175,36 +232,85 @@ impl LiftCtx {
 
             Insn::InvokeStatic { args, method_idx } => {
                 let arg_exprs: Vec<_> = args.iter().map(|r| self.reg(*r)).collect();
+
+                let info = self.pool.methods.get(&(self.dex_shard, *method_idx));
+
+                let class = info
+                    .map(|m| {
+                        m.class_name
+                            .split('.')
+                            .last()
+                            .unwrap_or(&m.class_name)
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "UnknownClass".into());
+
+                let method = self.method_ref(*method_idx);
                 let call = JsExpr::StaticCall {
-                    class:  format!("/* static_meth{} */", method_idx),
-                    method: String::new(),
-                    args:   arg_exprs,
+                    class,
+                    method,
+                    args: arg_exprs,
                 };
                 self.result       = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
             Insn::InvokeVirtualRange { first, count, method_idx } => {
-                let args: Vec<JsExpr> = (*first..*first + *count).map(|r| self.reg(r)).collect();
-                let recv      = args.first().cloned().unwrap_or(JsExpr::This);
-                let call_args = if args.len() > 1 { args[1..].to_vec() } else { vec![] };
+                let args: Vec<JsExpr> =
+                    (*first..*first + *count)
+                        .map(|r| self.reg(r))
+                        .collect();
+
+                let recv =
+                    args.first()
+                        .cloned()
+                        .unwrap_or(JsExpr::This);
+
+                let call_args =
+                    if args.len() > 1 {
+                        args[1..].to_vec()
+                    } else {
+                        vec![]
+                    };
+
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(recv),
-                    method:   format!("_meth{}", method_idx),
-                    args:     call_args,
+                    method: self.method_ref(*method_idx),
+                    args: call_args,
                 };
-                self.result       = Some(call.clone());
+
+                self.result = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
             Insn::InvokeStaticRange { first, count, method_idx } => {
-                let args: Vec<JsExpr> = (*first..*first + *count).map(|r| self.reg(r)).collect();
+                let args: Vec<JsExpr> =
+                    (*first..*first + *count)
+                        .map(|r| self.reg(r))
+                        .collect();
+
+                let info =
+                    self.pool.methods.get(&(self.dex_shard, *method_idx));
+
+                let class = info
+                    .map(|m| {
+                        m.class_name
+                            .split('.')
+                            .last()
+                            .unwrap_or(&m.class_name)
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "UnknownClass".into());
+
+                let method = self.method_ref(*method_idx);
+
                 let call = JsExpr::StaticCall {
-                    class:  format!("/* static_meth{} */", method_idx),
-                    method: String::new(),
+                    class,
+                    method,
                     args,
                 };
-                self.result       = Some(call.clone());
+
+                self.result = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
@@ -219,7 +325,7 @@ impl LiftCtx {
                             .collect();
 
                         let expr = JsExpr::New {
-                            class: format!("_type{}_{}", self.dex_shard, type_idx),
+                            class: self.type_ref(type_idx),
                             args: ctor_args,
                         };
 
@@ -241,7 +347,7 @@ impl LiftCtx {
 
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(recv),
-                    method: format!("_meth{}", method_idx),
+                    method: self.method_ref(*method_idx),
                     args: call_args,
                 };
 
@@ -255,8 +361,13 @@ impl LiftCtx {
 
             Insn::NewArray(d, len_reg, type_idx) => {
                 let len = self.reg(*len_reg);
+                let ty = self.type_ref(*type_idx);
                 self.set(*d, JsExpr::Raw(
-                    format!("new Array({}) /* type#{} */", render::expr_to_js(&len), type_idx)
+                    format!(
+                        "new Array({}) /* {}[] */",
+                        render::expr_to_js(&len),
+                        ty
+                    )
                 ), off);
             }
 
@@ -266,7 +377,7 @@ impl LiftCtx {
                         .map(|r| self.reg(*r))
                         .collect();
 
-                self.result = Some(JsExpr::StringConcat(exprs));
+                self.result = Some(JsExpr::ArrayLiteral(exprs));
             }
 
             Insn::AGet(d, arr, idx) | Insn::AGetObject(d, arr, idx) => {
@@ -291,8 +402,13 @@ impl LiftCtx {
 
             Insn::InstanceOf(d, obj, type_idx) => {
                 let oe = self.reg(*obj);
+                let ty = self.type_ref(*type_idx);
                 self.set(*d, JsExpr::Raw(
-                    format!("({} instanceof /* type#{} */)", render::expr_to_js(&oe), type_idx)
+                    format!(
+                        "({} instanceof {})",
+                        render::expr_to_js(&oe),
+                        ty
+                    )
                 ), off);
             }
 
@@ -510,7 +626,7 @@ impl LiftCtx {
 
         JsExpr::MethodCall {
             receiver: Box::new(receiver),
-            method: format!("_meth{}", method_idx),
+            method: self.method_ref(method_idx),
             args: call_args,
         }
     }

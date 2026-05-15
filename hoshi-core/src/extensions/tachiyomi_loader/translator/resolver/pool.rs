@@ -12,8 +12,6 @@ pub struct Pool {
     pub methods: HashMap<(usize, u32), MethodInfo>,
     pub fields: HashMap<(usize, u32), FieldInfo>,
     pub types: HashMap<(usize, u32), String>,
-
-    // full class name -> metadata
     pub type_info: HashMap<String, TypeInfo>,
 }
 

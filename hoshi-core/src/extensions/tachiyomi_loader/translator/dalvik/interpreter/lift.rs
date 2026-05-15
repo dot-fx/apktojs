@@ -3,6 +3,7 @@ use crate::extensions::tachiyomi_loader::translator::dalvik::insn::{DecodedInsn,
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::ctx::LiftCtx;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{reloop, JsExpr, JsStmt, TaggedStmt};
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::cleanup::{cleanup, elide_redundant_assigns};
+use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
 pub fn lift(
     insns:          &[Insn],
@@ -12,6 +13,7 @@ pub fn lift(
     params_size:    u16,
     is_static:      bool,
     dex_shard:      usize,
+    pool: &Pool,
 ) -> (Vec<JsStmt>, Vec<String>) {
     let this_reg = if is_static {
         None
@@ -30,6 +32,7 @@ pub fn lift(
         method_name: method_name.to_string(),
         this_reg,
         dex_shard,
+        pool,
     };
 
     // Seed parameter registers.

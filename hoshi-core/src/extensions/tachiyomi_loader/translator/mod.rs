@@ -5,6 +5,7 @@ pub mod resolver;
 use crate::extensions::tachiyomi_loader::{ApkMeta, EntryKind, WalkedSource};
 use crate::error::CoreError;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::lift;
+use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
 pub struct TranslatedSource {
     pub js: String,
@@ -30,6 +31,7 @@ impl From<TranslateError> for CoreError {
 pub fn translate(
     walked: &WalkedSource,
     meta:   &ApkMeta,
+    pool:   &Pool,
 ) -> Result<TranslatedSource, TranslateError> {
     let mut warnings    = Vec::new();
     let mut js_methods  = Vec::new();
@@ -49,6 +51,7 @@ pub fn translate(
             method.ins_size,
             method.is_static,
             walked.dex_shard,
+            pool,
         );
 
         warnings.append(&mut w);
