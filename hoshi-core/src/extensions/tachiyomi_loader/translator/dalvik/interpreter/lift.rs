@@ -61,7 +61,12 @@ pub fn lift(
             | Insn::PackedSwitch { .. } | Insn::SparseSwitch { .. }
         );
         if is_branch {
-            ctx.pending_new.clear();
+            let is_backward = matches!(insn, Insn::Goto(rel) if (*rel as i32) < 0)
+                || matches!(insn, Insn::Goto16(rel) if (*rel as i32) < 0)
+                || matches!(insn, Insn::Goto32(rel) if *rel < 0);
+            if is_backward {
+                ctx.pending_new.clear();
+            }
         }
 
         ctx.process(insn, offset);

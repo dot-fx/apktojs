@@ -125,7 +125,7 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
                 });
                 cur_off = snap(i + 1);
             }
-            JsStmt::Switch { expr, cases } => {
+            JsStmt::Switch { expr, cases, default } => {
                 let fall_off = snap(i + 1);
                 let resolved: Vec<(i32, i32)> = cases.iter().map(|(key, body)| {
                     let target = body.iter().find_map(|s| {
@@ -145,7 +145,17 @@ pub fn build_blocks(tagged: Vec<TaggedStmt>) -> Vec<BasicBlock> {
                     term:   Terminator::Switch {
                         expr:    expr.clone(),
                         cases:   resolved,
-                        default: fall_off,
+                        default: default.as_ref()
+                            .and_then(|body| {
+                                body.iter().find_map(|s| {
+                                    if let JsStmt::Goto(t) = s {
+                                        Some(normalize_target(*t))
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .unwrap_or(fall_off),
                     },
                 });
                 cur_off = fall_off;

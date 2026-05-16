@@ -65,12 +65,13 @@ fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
             body: simplify_first_instance(body),
         },
 
-        JsStmt::Switch { expr, cases } => JsStmt::Switch {
+        JsStmt::Switch { expr, cases, default } => JsStmt::Switch {
             expr,
             cases: cases
                 .into_iter()
                 .map(|(k, v)| (k, simplify_first_instance(v)))
                 .collect(),
+            default: default.map(simplify_first_instance),
         },
 
         other => other,
@@ -143,13 +144,14 @@ fn simplify_stmt_loops(stmt: JsStmt) -> JsStmt {
             else_body: simplify_loops(else_body),
         },
 
-        JsStmt::Switch { expr, cases } => {
+        JsStmt::Switch { expr, cases, default } => {
             JsStmt::Switch {
                 expr,
                 cases: cases
                     .into_iter()
                     .map(|(k, v)| (k, simplify_loops(v)))
                     .collect(),
+                default: default.map(simplify_loops),
             }
         }
 
@@ -297,11 +299,12 @@ pub fn elide_redundant_assigns(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
                 JsStmt::Loop { body } => JsStmt::Loop {
                     body: elide_redundant_assigns(body),
                 },
-                JsStmt::Switch { expr, cases } => JsStmt::Switch {
+                JsStmt::Switch { expr, cases, default } => JsStmt::Switch {
                     expr,
                     cases: cases.into_iter()
                         .map(|(k, b)| (k, elide_redundant_assigns(b)))
                         .collect(),
+                    default: default.map(elide_redundant_assigns),
                 },
                 other => other,
             };

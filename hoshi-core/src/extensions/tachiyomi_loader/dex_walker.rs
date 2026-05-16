@@ -152,6 +152,8 @@ fn find_factory_sources(
     let insns = dalvik::decode(&insns_raw);
     let mut descriptors = Vec::new();
 
+    println!("createSources has {} instructions", insns.len());
+
     for decoded in &insns {
         if let Insn::NewInstance(_, type_idx) = &decoded.insn {
             let desc = shard.get_type(*type_idx)
@@ -165,17 +167,25 @@ fn find_factory_sources(
                     Err(())
                 })
                 .unwrap_or_default();
+            println!("NewInstance type_idx={} desc={}", type_idx, desc);
 
-            if desc.is_empty() {
-                continue;
-            }
+            if desc.is_empty() { continue; }
 
             let fq = from_dex_descriptor(&desc);
 
-            if fq.contains("kanade") || fq.contains("tachiyomi") {
-                if !descriptors.contains(&desc) {
-                    descriptors.push(desc);
-                }
+            // Skip framework/stdlib classes
+            if fq.starts_with("java.")
+                || fq.starts_with("kotlin.")
+                || fq.starts_with("android.")
+                || fq.starts_with("androidx.")
+                || fq.starts_with("eu.kanade.tachiyomi.source.")  // base classes only
+            {
+                continue;
+            }
+
+            // Accept anything else instantiated in createSources
+            if !descriptors.contains(&desc) {
+                descriptors.push(desc);
             }
         }
     }

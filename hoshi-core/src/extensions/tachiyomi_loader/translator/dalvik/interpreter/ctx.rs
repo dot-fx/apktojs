@@ -477,10 +477,19 @@ impl<'a> LiftCtx<'a> {
 
             Insn::PackedSwitch { reg, first_key, targets } => {
                 let e = self.reg(*reg);
-                let cases: Vec<(i32, Vec<JsStmt>)> = targets.iter().enumerate()
-                    .map(|(i, &abs_target)| (*first_key + i as i32, vec![JsStmt::Goto(abs_target)]))
+
+                let cases: Vec<(i32, Vec<JsStmt>)> = targets.iter()
+                    .enumerate()
+                    .map(|(i, &abs_target)| {
+                        (*first_key + i as i32, vec![JsStmt::Goto(abs_target)])
+                    })
                     .collect();
-                self.push(off, JsStmt::Switch { expr: e, cases });
+
+                self.push(off, JsStmt::Switch {
+                    expr: e,
+                    cases,
+                    default: None,
+                });
             }
 
             Insn::SparseSwitch { reg, keys, targets } => {
@@ -488,7 +497,11 @@ impl<'a> LiftCtx<'a> {
                 let cases: Vec<(i32, Vec<JsStmt>)> = keys.iter().zip(targets.iter())
                     .map(|(&key, &abs_target)| (key, vec![JsStmt::Goto(abs_target)]))
                     .collect();
-                self.push(off, JsStmt::Switch { expr: e, cases });
+                self.push(off, JsStmt::Switch {
+                    expr: e,
+                    cases,
+                    default: None,
+                });
             }
 
             // Arithmetic / logic

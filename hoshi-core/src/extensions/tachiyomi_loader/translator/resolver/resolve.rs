@@ -88,8 +88,11 @@ fn resolve_methods(js: &str, pool: &Pool) -> String {
         let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
         match lookup_method(pool, idx) {
             Some(m) => {
-                if m.method_name.starts_with('<') {
-                    return format!("_meth{}(", idx);
+                if m.method_name == "<init>" {
+                    return "constructor(".to_string();
+                }
+                if m.method_name == "<clinit>" {
+                    return "/* static init */(".to_string();
                 }
                 let name = m.js_name.as_deref().unwrap_or(&m.method_name);
                 format!("{}(", name)

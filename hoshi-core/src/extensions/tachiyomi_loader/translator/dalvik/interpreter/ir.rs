@@ -29,7 +29,11 @@ pub enum JsStmt {
     Return(Option<JsExpr>),
     If     { cond: JsExpr, then_body: Vec<JsStmt>, else_body: Vec<JsStmt> },
     Loop   { body: Vec<JsStmt> },
-    Switch { expr: JsExpr, cases: Vec<(i32, Vec<JsStmt>)> },
+    Switch {
+        expr: JsExpr,
+        cases: Vec<(i32, Vec<JsStmt>)>,
+        default: Option<Vec<JsStmt>>,
+    },
     While {
         cond: JsExpr,
         body: Vec<JsStmt>,
