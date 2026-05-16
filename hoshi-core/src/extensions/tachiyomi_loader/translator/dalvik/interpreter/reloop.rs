@@ -134,10 +134,20 @@ fn reloop(
             }
 
             if let Some(cond) = header_cond {
-                out.push(JsStmt::While {
-                    cond,
-                    body,
-                });
+                if cond_regs_written_in_body(&cond, &body) {
+                    // condition register is clobbered in body — use explicit break
+                    let mut safe_body = vec![
+                        JsStmt::If {
+                            cond: interpreter::negate(cond),
+                            then_body: vec![JsStmt::Break],
+                            else_body: vec![],
+                        },
+                    ];
+                    safe_body.extend(body);
+                    out.push(JsStmt::Loop { body: safe_body });
+                } else {
+                    out.push(JsStmt::While { cond, body });
+                }
             } else if let Some((cond, break_idx)) = recover_loop_condition(&body) {
                 let mut body = body;
                 body.remove(break_idx);
@@ -284,7 +294,38 @@ fn reloop(
                 }
                 resolved_cases.sort_by_key(|(k, _)| *k);
 
-                out.push(JsStmt::Switch { expr, cases: resolved_cases });
+                let resolved_default = if default != -1 {
+                    let default_start = b2i.get(&default).copied().unwrap_or(blocks.len());
+
+                    let mut default_body = Vec::new();
+                    let mut default_visited = visited.clone();
+
+                    reloop(
+                        blocks,
+                        b2i,
+                        loop_headers,
+                        preds,
+                        default_start,
+                        switch_end,
+                        loop_exit,
+                        current_loop,
+                        &mut default_visited,
+                        &mut default_body,
+                        depth + 1,
+                    );
+
+                    visited.extend(default_visited.into_iter());
+
+                    Some(default_body)
+                } else {
+                    None
+                };
+
+                out.push(JsStmt::Switch {
+                    expr,
+                    cases: resolved_cases,
+                    default: resolved_default,
+                });
 
                 idx = b2i.get(&switch_end).copied().unwrap_or(blocks.len());
                 continue;
@@ -396,6 +437,49 @@ fn strip_double_negation(expr: JsExpr) -> JsExpr {
 
         other => other,
     }
+}
+
+fn cond_regs_written_in_body(cond: &JsExpr, body: &[JsStmt]) -> bool {
+    let mut cond_regs = HashSet::new();
+    collect_expr_regs(cond, &mut cond_regs);
+    if cond_regs.is_empty() { return false; }
+    body_writes_any_reg(body, &cond_regs)
+}
+
+fn collect_expr_regs(expr: &JsExpr, out: &mut HashSet<u8>) {
+    match expr {
+        JsExpr::Reg(r) => { out.insert(*r); }
+        JsExpr::BinOp { left, right, .. } => {
+            collect_expr_regs(left, out);
+            collect_expr_regs(right, out);
+        }
+        JsExpr::UnaryOp { expr, .. } => collect_expr_regs(expr, out),
+        JsExpr::MethodCall { receiver, args, .. } => {
+            collect_expr_regs(receiver, out);
+            for a in args { collect_expr_regs(a, out); }
+        }
+        _ => {}
+    }
+}
+
+fn body_writes_any_reg(stmts: &[JsStmt], regs: &HashSet<u8>) -> bool {
+    for stmt in stmts {
+        match stmt {
+            JsStmt::Assign { reg, .. } if regs.contains(reg) => return true,
+            JsStmt::If { then_body, else_body, .. } => {
+                if body_writes_any_reg(then_body, regs)
+                    || body_writes_any_reg(else_body, regs) {
+                    return true;
+                }
+            }
+            JsStmt::Loop { body } | JsStmt::While { body, .. }
+            | JsStmt::DoWhile { body, .. } => {
+                if body_writes_any_reg(body, regs) { return true; }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn resolve_loop_condition(
