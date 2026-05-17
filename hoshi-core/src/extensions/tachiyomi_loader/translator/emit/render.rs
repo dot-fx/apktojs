@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use crate::extensions::tachiyomi_loader::{ApkMeta, WalkedSource};
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
 use crate::extensions::tachiyomi_loader::translator::emit::params::method_params;
 
@@ -143,6 +144,11 @@ fn simplify_cond(expr: &JsExpr) -> String {
             return expr_to_js(innermost);
         }
     }
+
+    if let JsExpr::BinOp { op, left, right } = expr {
+        return format!("{} {} {}", expr_to_js(left), op, expr_to_js(right));
+    }
+
     expr_to_js(expr)
 }
 
@@ -191,8 +197,13 @@ fn render_stmts(
                 then_body,
                 else_body,
             } => {
-                lines.push(format!("{}if ({}) {{", pad, simplify_cond(cond)));
+                let (cond, then_body, else_body) = if then_body.is_empty() && !else_body.is_empty() {
+                    (interpreter::negate(cond.clone()), else_body, then_body)
+                } else {
+                    (cond.clone(), then_body, else_body)
+                };
 
+                lines.push(format!("{}if ({}) {{", pad, simplify_cond(&cond)));
                 render_stmts(then_body, indent + 2, declared, lines);
 
                 if else_body.is_empty() {
@@ -438,7 +449,12 @@ pub fn expr_to_js(expr: &JsExpr) -> String {
             format!("({} {} {})", expr_to_js(left), op, expr_to_js(right))
         }
         JsExpr::UnaryOp { op, expr } => {
-            format!("({}{})", op, expr_to_js(expr))
+            match expr.as_ref() {
+                JsExpr::Reg(_) | JsExpr::MethodCall { .. } => {
+                    format!("{}{}",  op, expr_to_js(expr))
+                }
+                _ => format!("({}{})", op, expr_to_js(expr))
+            }
         }
 
         JsExpr::ArrayLiteral(items) => {
