@@ -319,6 +319,26 @@ pub fn render_class(
 ) -> String {
     let mut out = String::new();
 
+    let base_url = methods.iter()
+        .find(|m| m.name == "getBaseUrl" || m.name == "baseUrl")
+        .and_then(|m| {
+            // body is just `    return "https://...";`
+            let trimmed = m.body.trim();
+            if trimmed.starts_with("return \"") && trimmed.ends_with("\";") {
+                Some(trimmed
+                    .trim_start_matches("return \"")
+                    .trim_end_matches("\";")
+                    .to_string())
+            } else {
+                None
+            }
+        });
+
+    let base_url_line = match base_url {
+        Some(url) => format!("  get baseUrl() {{ return \"{}\"; }}\n", url),
+        None => "  get baseUrl() { return /* TODO: fill in baseUrl */\"\"; }\n".to_string(),
+    };
+
     out.push_str("// AUTO-GENERATED - Tachiyomi extension translator\n");
     out.push_str(&format!("// Package  : {}\n", meta.package));
     out.push_str(&format!("// Name     : {} (lang: {})\n", meta.name, meta.lang));
@@ -330,7 +350,7 @@ pub fn render_class(
     out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
     out.push_str(&format!("  get name()    {{ return {:?}; }}\n", meta.name));
     out.push_str(&format!("  get lang()    {{ return {:?}; }}\n", meta.lang));
-    out.push_str("  get baseUrl() { return /* TODO: fill in baseUrl */\"\"; }\n");
+    out.push_str(&base_url_line);
     if meta.nsfw {
         out.push_str("  // nsfw = true\n");
     }

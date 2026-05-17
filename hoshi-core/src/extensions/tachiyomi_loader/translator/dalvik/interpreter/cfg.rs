@@ -242,6 +242,7 @@ pub fn find_loop_end(
     blocks: &[BasicBlock],
     start_idx: usize,
     header: i32,
+    b2i: &HashMap<i32, usize>
 ) -> i32 {
     let mut max_back_idx = start_idx;
     let mut found_backedge = false;
@@ -257,19 +258,30 @@ pub fn find_loop_end(
         return i32::MAX;
     }
 
-    let layout_next = blocks.get(max_back_idx + 1).map(|b| b.offset).unwrap_or(i32::MAX);
-
+    // Prefer the header's own exit branch as the loop end —
+    // it's the most reliable boundary regardless of where the
+    // last backedge block happens to sit in the layout.
     if let Some(header_block) = blocks.get(start_idx) {
         if let Terminator::CondGoto { if_true, if_false, .. } = &header_block.term {
             let max_body_offset = blocks[max_back_idx].offset;
-            if *if_true > max_body_offset {
+
+            // Check if the exit target is a cold throw block
+            let if_true_is_throw = b2i.get(if_true)
+                .and_then(|&i| blocks.get(i))
+                .map(|b| matches!(b.term, Terminator::Throw | Terminator::ImplicitReturn))
+                .unwrap_or(false);
+
+            if *if_true > max_body_offset && !if_true_is_throw {
                 return *if_true;
             }
-            if *if_false > max_body_offset {
+            if *if_false > max_body_offset && *if_false != header {
                 return *if_false;
             }
         }
     }
 
-    layout_next
+    // Fallback: block immediately after the last backedge block
+    blocks.get(max_back_idx + 1)
+        .map(|b| b.offset)
+        .unwrap_or(i32::MAX)
 }

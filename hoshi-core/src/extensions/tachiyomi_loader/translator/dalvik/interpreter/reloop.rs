@@ -4,10 +4,6 @@ use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{cfg, 
 
 const MAX_DEPTH: usize = 64;
 
-fn next_block_offset(blocks: &[BasicBlock], b2i: &HashMap<i32, usize>, idx: usize) -> i32 {
-    blocks.get(idx + 1).map(|b| b.offset).unwrap_or(i32::MAX)
-}
-
 pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
     let tagged: Vec<TaggedStmt> = tagged
         .into_iter()
@@ -56,6 +52,7 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
         &mut out,
         0,
     );
+    eprintln!("structure_cfg: out.len()={}", out.len());
 
     out
 }
@@ -81,13 +78,21 @@ fn reloop(
     while idx < blocks.len() {
         let block = &blocks[idx];
 
-        if block.offset >= until { break; }
-        if visited.contains(&idx) { break; }
+        if block.offset >= until {
+            eprintln!("reloop: break at offset>={} (until={})", block.offset, until);
+            break;
+        }
+        if visited.contains(&idx) {
+            eprintln!("reloop: break visited idx={} offset={}", idx, block.offset);
+            break;
+        }
 
         if loop_headers.contains(&block.offset)
             && Some(block.offset) != current_loop
         {
-            let loop_end = cfg::find_loop_end(blocks, idx, block.offset);
+            let loop_end = cfg::find_loop_end(blocks, idx, block.offset, b2i);
+            eprintln!("find_loop_end: idx={} header_offset={} -> loop_end={}", idx, block.offset, loop_end);
+
 
             for bi in idx..blocks.len() {
                 let b = &blocks[bi];
@@ -135,7 +140,6 @@ fn reloop(
 
             if let Some(cond) = header_cond {
                 if cond_regs_written_in_body(&cond, &body) {
-                    // condition register is clobbered in body — use explicit break
                     let mut safe_body = vec![
                         JsStmt::If {
                             cond: interpreter::negate(cond),
@@ -158,6 +162,8 @@ fn reloop(
             }
 
             idx = b2i.get(&loop_end).copied().unwrap_or(blocks.len());
+            eprintln!("reloop: after loop, loop_end={} idx={} blocks.len()={}", loop_end, idx, blocks.len());
+
             continue;
         }
 
@@ -167,10 +173,12 @@ fn reloop(
 
         match &block.term {
             Terminator::Return(e) => {
+                eprintln!("reloop: Return at idx={}", idx);
                 out.push(JsStmt::Return(e.clone()));
                 break;
             }
             Terminator::ImplicitReturn | Terminator::Throw => {
+                eprintln!("reloop: ImplicitReturn/Throw at idx={}", idx);
                 break;
             }
             Terminator::Goto(t) => {
@@ -353,7 +361,7 @@ fn find_join_relooper(
                     }
                 } else if t <= b.offset {
                     let header_idx = b2i.get(&t).copied().unwrap_or(blocks.len());
-                    let loop_exit_off = cfg::find_loop_end(blocks, header_idx, t);
+                    let loop_exit_off = cfg::find_loop_end(blocks, header_idx, t, b2i);
                     if loop_exit_off < until {
                         if let Some(&ei) = b2i.get(&loop_exit_off) {
                             stack.push(ei);

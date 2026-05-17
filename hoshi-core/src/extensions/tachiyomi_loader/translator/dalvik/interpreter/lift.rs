@@ -76,6 +76,7 @@ pub fn lift(
 
     let tagged = ctx.tagged;
     let stmts  = reloop::structure_cfg(tagged);
+    eprintln!("simplify_first_instance: total stmts={}", stmts.len());
     let stmts = cleanup(stmts);
     (stmts, ctx.warnings)
 }
