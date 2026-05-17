@@ -272,7 +272,6 @@ fn reloop(
                         Vec::new()
                     }).push(key);
                 }
-                target_order.sort_unstable();
 
                 let mut resolved_cases: Vec<(i32, Vec<JsStmt>)> = Vec::new();
 

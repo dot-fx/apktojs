@@ -83,21 +83,18 @@ fn resolve_strings(js: &str, pool: &Pool) -> String {
 }
 
 fn resolve_methods(js: &str, pool: &Pool) -> String {
-    let re = Regex::new(r"_meth(\d+)\(").unwrap();
+    let re = Regex::new(r"_meth(\d+)_(\d+)\(").unwrap();
     re.replace_all(js, |caps: &regex::Captures| {
-        let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
-        match lookup_method(pool, idx) {
+        let shard: usize = caps[1].parse().unwrap_or(0);
+        let idx: u32     = caps[2].parse().unwrap_or(u32::MAX);
+        match pool.methods.get(&(shard, idx)) {
             Some(m) => {
-                if m.method_name == "<init>" {
-                    return "constructor(".to_string();
-                }
-                if m.method_name == "<clinit>" {
-                    return "/* static init */(".to_string();
-                }
                 let name = m.js_name.as_deref().unwrap_or(&m.method_name);
+                if name == "<init>"   { return "constructor(".to_string(); }
+                if name == "<clinit>" { return "/* static init */(".to_string(); }
                 format!("{}(", name)
             }
-            None => format!("_meth{}(", idx),
+            None => format!("_meth{}_{}", shard, idx),
         }
     }).into_owned()
 }

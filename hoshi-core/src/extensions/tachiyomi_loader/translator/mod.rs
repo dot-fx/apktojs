@@ -4,7 +4,8 @@ pub mod resolver;
 
 use crate::extensions::tachiyomi_loader::{ApkMeta, EntryKind, WalkedSource};
 use crate::error::CoreError;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::lift;
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{lift, JsExpr, JsStmt};
+use crate::extensions::tachiyomi_loader::translator::resolver::infer::{InferCtx, SymKey};
 use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
 pub struct TranslatedSource {
@@ -33,32 +34,50 @@ pub fn translate(
     meta:   &ApkMeta,
     pool:   &Pool,
 ) -> Result<TranslatedSource, TranslateError> {
-    let mut warnings    = Vec::new();
-    let mut js_methods  = Vec::new();
+    let mut warnings   = Vec::new();
+    let mut js_methods = Vec::new();
+
+    let mut lifted: Vec<(Vec<JsStmt>, String)> = Vec::new();
 
     for method in &walked.methods {
-        let decoded = dalvik::decode(&method.insns);
-
-        let insn_only: Vec<_> = decoded.iter()
-            .map(|d| d.insn.clone())
-            .collect();
+        let decoded  = dalvik::decode(&method.insns);
+        let insn_only: Vec<_> = decoded.iter().map(|d| d.insn.clone()).collect();
 
         let (stmts, mut w) = lift(
-            &insn_only,
-            &decoded,
-            &method.name,
-            method.registers_size,
-            method.ins_size,
-            method.is_static,
-            walked.dex_shard,
-            pool,
+            &insn_only, &decoded,
+            &method.name, method.registers_size, method.ins_size,
+            method.is_static, walked.dex_shard, pool,
         );
 
         warnings.append(&mut w);
+        lifted.push((stmts, method.name.clone()));
+    }
 
-        let body = emit::render::stmts_to_js(&stmts, 4, &method.name);
+    let mut pool_mut = pool.clone();
+    let mut infer_ctx = InferCtx::default();
+
+    for (stmts, _) in &lifted {
+        infer_ctx.scan_stmts(stmts, &pool_mut, walked.dex_shard);
+    }
+    let before: std::collections::HashMap<(usize, u32), Option<String>> = pool_mut.methods.iter()
+        .map(|(k, m)| (*k, m.js_name.clone()))
+        .collect();
+
+    infer_ctx.apply(&mut pool_mut);
+
+    for ((s, idx), m) in &pool_mut.methods {
+        let was = before.get(&(*s, *idx)).and_then(|v| v.as_deref());
+        let now = m.js_name.as_deref();
+        if now != was {
+            eprintln!("INFER WROTE: ({},{}) {} → {}",
+                      s, idx, m.method_name, now.unwrap_or("None"));
+        }
+    }
+
+    for (stmts, method_name) in &lifted {
+        let body = emit::render::stmts_to_js(stmts, 4, method_name);
         js_methods.push(emit::render::JsMethod {
-            name: method.name.clone(),
+            name: method_name.clone(),
             body,
         });
     }
@@ -74,13 +93,23 @@ pub fn translate(
         }
     };
 
+    for ((s, idx), m) in &pool_mut.methods {
+        if *s != walked.dex_shard { continue; }
+        if let Some(ev) = infer_ctx.evidence.get(&SymKey::Method(*s, *idx)) {
+            if infer_ctx.best_name(&SymKey::Method(*s, *idx)).is_none() && ev.entries.len() > 1 {
+                eprintln!("NO WIN ({},{}) class={} method={} entries: {:?}",
+                          s, idx, m.class_name, m.method_name,
+                          ev.entries.iter().map(|e| format!("{:?}", e.kind)).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
     let raw_js = emit::render::render_class(
-        &meta.name,
-        base_class,
-        meta,
-        &js_methods,
-        walked,
+        &meta.name, base_class, meta, &js_methods, walked,
     );
 
-    Ok(TranslatedSource { js: raw_js, warnings })
+    let resolved = resolver::resolve::resolve(&raw_js, &pool_mut);
+
+    Ok(TranslatedSource { js: resolved, warnings })
 }

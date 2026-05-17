@@ -3,34 +3,22 @@ use regex::Regex;
 pub fn well_known_method(class: &str, method: &str) -> Option<String> {
     let simple = class.split('.').last().unwrap_or(class);
 
-
     let mapped = match (simple, method) {
-        // StringBuilder / buildString
         ("StringBuilder", "append")   => "append",
         ("StringBuilder", "toString") => "toString",
-
         ("Object", "getClass") => "getClass",
-
-
-        // OkHttp Request.Builder
         ("Builder", "url")     => "url",
         ("Builder", "build")   => "build",
         ("Builder", "addHeader") => "addHeader",
         ("Builder", "header")  => "header",
         ("Builder", "post")    => "post",
         ("Builder", "get")     => "get",
-
-
-        // HttpUrl.Builder
         ("Builder", "addQueryParameter") => "addQueryParameter",
         ("Builder", "addPathSegment")    => "addPathSegment",
         ("Builder", "setQueryParameter") => "setQueryParameter",
         ("Builder", "removeQueryParameter") => "removeQueryParameter",
         ("Builder", "fragment")          => "fragment",
         ("Builder", "newBuilder")        => "newBuilder",
-
-
-        // String methods
         ("String", "format") => "_fmt",
         ("String", "trim")     => "trim",
         ("String", "split")    => "split",
@@ -39,38 +27,47 @@ pub fn well_known_method(class: &str, method: &str) -> Option<String> {
         ("String", "replace")  => "replace",
         ("String", "lowercase")=> "toLowerCase",
         ("String", "uppercase")=> "toUpperCase",
-
-
-        // JSONObject / JSONArray
         ("JSONObject", "getString") => "getString",
         ("JSONObject", "getInt") => "getInt",
         ("JSONObject", "optString") => "optString",
         ("JSONArray",  "length")    => "length",
         ("JSONArray",  "getJSONObject") => "getJSONObject",
-
-
-        // Jsoup
         ("Jsoup", "parse")  => "Jsoup.parse",
         ("Element", "select") => "select",
         ("Element", "selectFirst") => "selectFirst",
         ("Element", "text")  => "text",
         ("Element", "attr")  => "attr",
         ("Element", "html")  => "html",
-
-
-        // Collections
         ("ArrayList", "add")   => "push",
         ("MutableList", "add") => "push",
-
-
-        // Kotlin stdlib
         ("Regex", "find") => "find",
         ("Regex", "findAll") => "findAll",
         ("Regex", "matches") => "matches",
         ("Regex", "containsMatchIn") => "test",
         ("MatchResult", "groupValues") => "groupValues",
-
-        _ => return None,
+        _ => match method {
+            "toString"   => "toString",
+            "hashCode"   => "hashCode",
+            "equals"     => "equals",
+            "getClass"   => "getClass",
+            "iterator"   => "iterator",
+            "hasNext"    => "hasNext",
+            "next"       => "next",
+            "size"       => "size",
+            "isEmpty"    => "isEmpty",
+            "isNotEmpty" => "isNotEmpty",
+            "append"     => "append",
+            "length"     => "length",
+            "get"        => "get",
+            "add"        => "add",
+            "remove"     => "remove",
+            "contains"   => "contains",
+            "indexOf"    => "indexOf",
+            "close"      => "close",
+            "name"       => "name",
+            "ordinal"    => "ordinal",
+            _ => return None,
+        },
     };
     Some(mapped.to_string())
 }

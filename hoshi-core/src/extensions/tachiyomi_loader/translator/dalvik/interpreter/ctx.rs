@@ -87,15 +87,16 @@ impl<'a> LiftCtx<'a> {
     }
 
     fn method_ref(&self, mi: u32) -> String {
-        self.pool
-            .methods
+        self.pool.methods
             .get(&(self.dex_shard, mi))
             .map(|m| {
-                m.js_name
-                    .clone()
-                    .unwrap_or_else(|| m.method_name.clone())
+                if let Some(js) = &m.js_name {
+                    js.clone()
+                } else {
+                    format!("_meth{}_{}", self.dex_shard, mi)
+                }
             })
-            .unwrap_or_else(|| format!("meth{}", mi))
+            .unwrap_or_else(|| format!("_meth{}_{}", self.dex_shard, mi))
     }
 
     pub fn process(&mut self, insn: &Insn, off: i32) {

@@ -152,8 +152,6 @@ fn find_factory_sources(
     let insns = dalvik::decode(&insns_raw);
     let mut descriptors = Vec::new();
 
-    println!("createSources has {} instructions", insns.len());
-
     for decoded in &insns {
         if let Insn::NewInstance(_, type_idx) = &decoded.insn {
             let desc = shard.get_type(*type_idx)
@@ -167,7 +165,6 @@ fn find_factory_sources(
                     Err(())
                 })
                 .unwrap_or_default();
-            println!("NewInstance type_idx={} desc={}", type_idx, desc);
 
             if desc.is_empty() { continue; }
 

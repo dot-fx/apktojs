@@ -7,6 +7,7 @@ use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{
     well_known_method,
 };
 
+#[derive(Clone)]
 pub struct Pool {
     pub strings: HashMap<(usize, u32), String>,
     pub methods: HashMap<(usize, u32), MethodInfo>,
@@ -15,12 +16,14 @@ pub struct Pool {
     pub type_info: HashMap<String, TypeInfo>,
 }
 
+#[derive(Clone)]
 pub struct MethodInfo {
     pub class_name: String,
     pub method_name: String,
     pub js_name: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct FieldInfo {
     pub class_name: String,
     pub field_name: String,
@@ -46,17 +49,13 @@ impl Pool {
         let mut type_info = HashMap::new();
 
         for (shard_idx, shard) in shards.iter().enumerate() {
-
-            // ---------------- Strings ----------------
-
+            
             for (idx, s) in shard.strings().enumerate() {
                 if let Ok(s) = s {
                     strings.insert((shard_idx, idx as u32), s.to_string());
                 }
             }
-
-            // ---------------- Types ----------------
-
+            
             for (idx, t) in shard.types().enumerate() {
                 if let Ok(t) = t {
                     let name = from_dex_type(t.to_string().as_str());
@@ -80,9 +79,7 @@ impl Pool {
                     });
                 }
             }
-
-            // ---------------- Methods ----------------
-
+            
             for (meth_idx, item) in shard.method_ids().enumerate() {
                 if let Ok(item) = item {
 
@@ -112,9 +109,7 @@ impl Pool {
                     }
                 }
             }
-
-            // ---------------- Fields ----------------
-
+            
             for (field_idx, item) in shard.field_ids().enumerate() {
                 if let Ok(item) = item {
 
@@ -137,9 +132,7 @@ impl Pool {
                     );
                 }
             }
-
-            // ---------------- Class defs ----------------
-
+            
             for class in shard.classes() {
                 if let Ok(class) = class {
 
