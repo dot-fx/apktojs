@@ -243,9 +243,7 @@ fn reloop(
                     reloop(blocks, b2i, loop_headers, preds,
                            branch_idx, join, loop_exit, current_loop,
                            &mut else_visited, &mut else_body, depth + 1);
-                    visited.extend(else_visited.into_iter());
                 }
-                visited.extend(then_visited.into_iter());
 
                 if !then_body.is_empty() || !else_body.is_empty() {
                     out.push(JsStmt::If {

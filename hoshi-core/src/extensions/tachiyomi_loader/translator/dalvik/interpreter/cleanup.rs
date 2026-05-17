@@ -16,23 +16,32 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     while i < stmts.len() {
         if i + 2 < stmts.len() {
             if let (
-                JsStmt::While { body, .. },
-                JsStmt::Assign { .. },
+                JsStmt::While { cond, body },
+                JsStmt::Assign { reg: result_reg, .. },
                 JsStmt::Expr(JsExpr::Raw(s)),
             ) = (&stmts[i], &stmts[i + 1], &stmts[i + 2])
             {
-                if s.starts_with("throw ")
-                    && try_rewrite_first_instance(body)
-                {
-                    out.push(JsStmt::Assign {
-                        reg: 6,
-                        expr: JsExpr::Raw(
-                            "firstInstance(v5, (v6) => v6 instanceof s1)".into()
-                        ),
-                    });
+                if s.starts_with("throw ") {
+                    if let Some((_inst_reg, class_name)) = try_rewrite_first_instance(body) {
+                        let iter_reg = extract_iter_reg(cond);
+                        let result_reg = *result_reg;
 
-                    i += 3;
-                    continue;
+                        let expr = format!(
+                            "firstInstance(v{}, (v{}) => v{} instanceof {})",
+                            iter_reg,
+                            iter_reg,
+                            iter_reg,
+                            class_name,
+                        );
+
+                        out.push(JsStmt::Assign {
+                            reg: result_reg,
+                            expr: JsExpr::Raw(expr),
+                        });
+
+                        i += 3;
+                        continue;
+                    }
                 }
             }
         }
@@ -42,6 +51,19 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     }
 
     out
+}
+
+fn extract_iter_reg(cond: &JsExpr) -> u8 {
+    match cond {
+        JsExpr::MethodCall { receiver, .. } => {
+            match receiver.as_ref() {
+                JsExpr::Reg(r) => *r,
+                _ => 5, // fallback
+            }
+        }
+        JsExpr::Reg(r) => *r,
+        _ => 5,
+    }
 }
 
 fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
@@ -78,41 +100,32 @@ fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
     }
 }
 
-fn try_rewrite_first_instance(body: &[JsStmt]) -> bool {
-    if body.len() < 2 {
-        return false;
-    }
-
-    let mut found_instanceof = false;
+fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(u8, String)> {
+    let mut instanceof_reg: Option<u8> = None;
+    let mut class_name: Option<String> = None;
 
     for stmt in body {
         match stmt {
-            JsStmt::Assign {
-                expr: JsExpr::Raw(s),
-                ..
-            } if s.contains("instanceof") => {
-                found_instanceof = true;
-            }
-
-            JsStmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                if else_body.is_empty()
-                    && then_body.len() == 1
-                    && matches!(then_body[0], JsStmt::Break)
-                    && found_instanceof
+            JsStmt::Assign { reg, expr: JsExpr::Raw(s) }
+            if s.contains("instanceof") =>
                 {
-                    return true;
+                    if let Some(cls) = s.split("instanceof").nth(1) {
+                        instanceof_reg = Some(*reg);
+                        class_name = Some(cls.trim().to_string());
+                    }
                 }
-            }
-
+            JsStmt::If { then_body, else_body, .. }
+            if else_body.is_empty()
+                && then_body.len() == 1
+                && matches!(then_body[0], JsStmt::Break)
+                && instanceof_reg.is_some() =>
+                {
+                    return Some((instanceof_reg.unwrap(), class_name.unwrap()));
+                }
             _ => {}
         }
     }
-
-    false
+    None
 }
 
 fn simplify_loops(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
