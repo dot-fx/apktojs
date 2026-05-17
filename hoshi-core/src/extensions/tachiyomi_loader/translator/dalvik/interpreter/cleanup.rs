@@ -2,10 +2,9 @@ use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExp
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = elide_redundant_assigns(stmts);
-    let stmts = simplify_loops(stmts);
     let stmts = simplify_array_add(stmts);
     let stmts = simplify_first_instance(stmts);
-
+    let stmts = simplify_foreach(stmts);
     stmts
 }
 
@@ -62,12 +61,10 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
 
 fn extract_iter_reg(cond: &JsExpr) -> u8 {
     match cond {
-        JsExpr::MethodCall { receiver, .. } => {
-            match receiver.as_ref() {
-                JsExpr::Reg(r) => *r,
-                _ => 5, // fallback
-            }
-        }
+        JsExpr::MethodCall { receiver, .. } => match receiver.as_ref() {
+            JsExpr::Reg(r) => *r,
+            _ => 5,
+        },
         JsExpr::Reg(r) => *r,
         _ => 5,
     }
@@ -75,25 +72,18 @@ fn extract_iter_reg(cond: &JsExpr) -> u8 {
 
 fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
     match stmt {
-        JsStmt::If {
-            cond,
-            then_body,
-            else_body,
-        } => JsStmt::If {
+        JsStmt::If { cond, then_body, else_body } => JsStmt::If {
             cond,
             then_body: simplify_first_instance(then_body),
             else_body: simplify_first_instance(else_body),
         },
-
         JsStmt::Loop { body } => JsStmt::Loop {
             body: simplify_first_instance(body),
         },
-
         JsStmt::While { cond, body } => JsStmt::While {
             cond,
             body: simplify_first_instance(body),
         },
-
         JsStmt::Switch { expr, cases, default } => JsStmt::Switch {
             expr,
             cases: cases
@@ -102,7 +92,6 @@ fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
                 .collect(),
             default: default.map(simplify_first_instance),
         },
-
         other => other,
     }
 }
@@ -113,14 +102,12 @@ fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(u8, String)> {
 
     for stmt in body {
         match stmt {
-            JsStmt::Assign { reg, expr: JsExpr::Raw(s) }
-            if s.contains("instanceof") =>
-                {
-                    if let Some(cls) = s.split("instanceof").nth(1) {
-                        instanceof_reg = Some(*reg);
-                        class_name = Some(cls.trim().to_string());
-                    }
+            JsStmt::Assign { reg, expr: JsExpr::Raw(s) } if s.contains("instanceof") => {
+                if let Some(cls) = s.split("instanceof").nth(1) {
+                    instanceof_reg = Some(*reg);
+                    class_name = Some(cls.trim().to_string());
                 }
+            }
             JsStmt::If { then_body, else_body, .. }
             if else_body.is_empty()
                 && then_body.len() == 1
@@ -135,165 +122,172 @@ fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(u8, String)> {
     None
 }
 
-fn simplify_loops(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
-    stmts
-        .into_iter()
-        .map(simplify_stmt_loops)
-        .collect()
-}
+fn simplify_foreach(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
+    let mut out = Vec::new();
+    let mut i = 0;
 
-fn simplify_stmt_loops(stmt: JsStmt) -> JsStmt {
-    match stmt {
-        JsStmt::Loop { body } => {
-            let body = simplify_loops(body);
-
-            if let Some(while_stmt) = try_make_while(&body) {
-                while_stmt
-            } else {
-                JsStmt::Loop { body }
+    while i < stmts.len() {
+        if i + 2 < stmts.len() {
+            if let Some(expr) = try_rewrite_foreach(&stmts[i], &stmts[i + 1], &stmts[i + 2]) {
+                out.push(JsStmt::Expr(JsExpr::Raw(expr)));
+                i += 3;
+                continue;
             }
         }
 
-        JsStmt::If {
-            cond,
-            then_body,
-            else_body,
-        } => JsStmt::If {
-            cond,
-            then_body: simplify_loops(then_body),
-            else_body: simplify_loops(else_body),
-        },
-
-        JsStmt::Switch { expr, cases, default } => {
-            JsStmt::Switch {
-                expr,
-                cases: cases
-                    .into_iter()
-                    .map(|(k, v)| (k, simplify_loops(v)))
-                    .collect(),
-                default: default.map(simplify_loops),
-            }
-        }
-
-        other => other,
+        out.push(rewrite_foreach_stmt(stmts[i].clone()));
+        i += 1;
     }
+
+    out
 }
 
-fn try_make_while(body: &[JsStmt]) -> Option<JsStmt> {
-    if body.len() < 2 {
-        return None;
-    }
-
-    let first = &body[0];
-    let second = &body[1];
-
-    let (reg, expr) = match first {
-        JsStmt::Assign { reg, expr } => (*reg, expr.clone()),
+fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> {
+    // s0: vA = vB.method()  — any no-arg method call that isn't .iterator() itself
+    let (list_reg, list_expr) = match s0 {
+        JsStmt::Assign {
+            reg,
+            expr: JsExpr::MethodCall { receiver, method, args },
+        } if args.is_empty() && method != "iterator" => {
+            (*reg, format!("{}.{}()", expr_to_str(receiver), method))
+        }
         _ => return None,
     };
 
-    match second {
-        JsStmt::If {
-            cond,
-            then_body,
-            else_body,
-        } => {
+    match s1 {
+        JsStmt::Assign {
+            reg,
+            expr: JsExpr::MethodCall { receiver, method, args },
+        } if *reg == list_reg
+            && method == "iterator"
+            && args.is_empty()
+            && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) => {}
+        _ => return None,
+    }
 
-            if !else_body.is_empty() {
-                return None;
-            }
-
-            if then_body.len() != 1 {
-                return None;
-            }
-
-            if !matches!(then_body[0], JsStmt::Break) {
-                return None;
-            }
-
+    let (item_reg, callback_stmts) = match s2 {
+        JsStmt::While { cond, body } => {
             match cond {
-                JsExpr::UnaryOp { op, expr: inner } if *op == "!" => {
-                    match inner.as_ref() {
-                        JsExpr::Reg(r) if *r == reg => {
-                            let remaining = body[2..].to_vec();
-
-                            Some(JsStmt::While {
-                                cond: expr,
-                                body: simplify_loops(remaining),
-                            })
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
+                JsExpr::MethodCall { receiver, method, args }
+                if method == "hasNext"
+                    && args.is_empty()
+                    && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) => {}
+                _ => return None,
             }
-        }
 
+            if body.len() < 2 {
+                return None;
+            }
+
+            let item_reg = match &body[0] {
+                JsStmt::Assign {
+                    reg,
+                    expr: JsExpr::MethodCall { receiver, method, args },
+                } if method == "next"
+                    && args.is_empty()
+                    && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) =>
+                    {
+                        *reg
+                    }
+                _ => return None,
+            };
+
+            (item_reg, &body[1..])
+        }
+        _ => return None,
+    };
+
+    let body_str = callback_stmts
+        .iter()
+        .map(stmt_to_str)
+        .collect::<Option<Vec<_>>>()?
+        .join("; ");
+
+    Some(format!("{}.forEach(v{} => {})", list_expr, item_reg, body_str))
+}
+
+fn expr_to_str(expr: &JsExpr) -> String {
+    match expr {
+        JsExpr::Reg(r) => format!("v{}", r),
+        JsExpr::Raw(s) => s.clone(),
+        JsExpr::MethodCall { receiver, method, args } => {
+            let args_str = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("{}.{}({})", expr_to_str(receiver), method, args_str)
+        }
+        _ => "?".into(),
+    }
+}
+
+fn stmt_to_str(stmt: &JsStmt) -> Option<String> {
+    match stmt {
+        JsStmt::Expr(e) => Some(expr_to_str(e)),
+        JsStmt::Assign { reg, expr } => Some(format!("v{} = {}", reg, expr_to_str(expr))),
         _ => None,
     }
 }
 
+fn rewrite_foreach_stmt(stmt: JsStmt) -> JsStmt {
+    match stmt {
+        JsStmt::If { cond, then_body, else_body } => JsStmt::If {
+            cond,
+            then_body: simplify_foreach(then_body),
+            else_body: simplify_foreach(else_body),
+        },
+        JsStmt::Loop { body } => JsStmt::Loop {
+            body: simplify_foreach(body),
+        },
+        JsStmt::While { cond, body } => JsStmt::While {
+            cond,
+            body: simplify_foreach(body),
+        },
+        JsStmt::Switch { expr, cases, default } => JsStmt::Switch {
+            expr,
+            cases: cases
+                .into_iter()
+                .map(|(k, v)| (k, simplify_foreach(v)))
+                .collect(),
+            default: default.map(simplify_foreach),
+        },
+        other => other,
+    }
+}
+
 fn simplify_array_add(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
-    stmts
-        .into_iter()
-        .map(rewrite_add_stmt)
-        .collect()
+    stmts.into_iter().map(rewrite_add_stmt).collect()
 }
 
 fn rewrite_add_stmt(stmt: JsStmt) -> JsStmt {
     match stmt {
-        JsStmt::Expr(expr) => {
-            JsStmt::Expr(rewrite_add_expr(expr))
-        }
-
-        JsStmt::Assign { reg, expr } => {
-            JsStmt::Assign {
-                reg,
-                expr: rewrite_add_expr(expr),
-            }
-        }
-
-        JsStmt::If {
-            cond,
-            then_body,
-            else_body,
-        } => JsStmt::If {
+        JsStmt::Expr(expr) => JsStmt::Expr(rewrite_add_expr(expr)),
+        JsStmt::Assign { reg, expr } => JsStmt::Assign {
+            reg,
+            expr: rewrite_add_expr(expr),
+        },
+        JsStmt::If { cond, then_body, else_body } => JsStmt::If {
             cond: rewrite_add_expr(cond),
             then_body: simplify_array_add(then_body),
             else_body: simplify_array_add(else_body),
         },
-
-        JsStmt::Loop { body } => {
-            JsStmt::Loop {
-                body: simplify_array_add(body),
-            }
-        }
-
-        JsStmt::While { cond, body } => {
-            JsStmt::While {
-                cond: rewrite_add_expr(cond),
-                body: simplify_array_add(body),
-            }
-        }
-
+        JsStmt::Loop { body } => JsStmt::Loop {
+            body: simplify_array_add(body),
+        },
+        JsStmt::While { cond, body } => JsStmt::While {
+            cond: rewrite_add_expr(cond),
+            body: simplify_array_add(body),
+        },
         other => other,
     }
 }
 
 fn rewrite_add_expr(expr: JsExpr) -> JsExpr {
     match expr {
-        JsExpr::MethodCall {
-            receiver,
-            method,
-            args,
-        } if method == "add" => {
+        JsExpr::MethodCall { receiver, method, args } if method == "add" => {
             JsExpr::MethodCall {
                 receiver,
                 method: "push".into(),
                 args,
             }
         }
-
         other => other,
     }
 }
@@ -321,7 +315,8 @@ pub fn elide_redundant_assigns(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
                 },
                 JsStmt::Switch { expr, cases, default } => JsStmt::Switch {
                     expr,
-                    cases: cases.into_iter()
+                    cases: cases
+                        .into_iter()
                         .map(|(k, b)| (k, elide_redundant_assigns(b)))
                         .collect(),
                     default: default.map(elide_redundant_assigns),
