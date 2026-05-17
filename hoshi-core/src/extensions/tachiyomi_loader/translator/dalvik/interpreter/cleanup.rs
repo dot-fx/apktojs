@@ -43,6 +43,18 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
                         continue;
                     }
                 }
+                if let JsStmt::While { cond, body } = &stmts[i] {
+                    if let Some((_inst_reg, class_name)) = try_rewrite_first_instance(body) {
+                        let iter_reg = extract_iter_reg(cond);
+                        let expr = format!(
+                            "firstInstance(v{}, (v{}) => v{} instanceof {})",
+                            iter_reg, iter_reg, iter_reg, class_name,
+                        );
+                        out.push(JsStmt::Expr(JsExpr::Raw(expr)));
+                        i += 1;
+                        continue;
+                    }
+                }
             }
         }
 

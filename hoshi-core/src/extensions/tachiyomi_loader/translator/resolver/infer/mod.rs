@@ -142,7 +142,25 @@ impl InferCtx {
                     self.scan_stmts(else_body, pool, shard);
                 }
 
-                JsStmt::Loop { body } => self.scan_stmts(body, pool, shard),
+                JsStmt::Loop { body } => {
+                    if let Some(JsStmt::If { cond, then_body, else_body }) = body.first() {
+                        if else_body.is_empty()
+                            && then_body.len() == 1
+                            && matches!(then_body[0], JsStmt::Break)
+                        {
+                            let inner_cond = match cond {
+                                JsExpr::UnaryOp { op: "!", expr } => expr.as_ref(),
+                                other => other,
+                            };
+                            let resolved = self.resolve_expr(inner_cond, &reg_calls);
+                            if let Some(key) = self.call_key(&resolved, pool, shard) {
+                                self.evidence.entry(key).or_default()
+                                    .push(EvidenceKind::UsedAsLoopCondition, 1.0);
+                            }
+                        }
+                    }
+                    self.scan_stmts(body, pool, shard);
+                },
 
                 _ => {}
             }
