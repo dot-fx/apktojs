@@ -28,7 +28,17 @@ pub fn is_resolved_method(method: &str, pool: &Pool, shard: usize) -> bool {
         | "body" | "source" | "request" | "url" | "execute"
         | "decodeFromBufferedSource" | "decodeFromString" | "serializer"
         | "tryParse" | "selectFirst" | "data" | "select" | "text" | "attr"
-        | "getClass" | "getUrl" | "getBaseUrl" | "getHeaders" | "getClient"
+        | "getClass" | "getUrl" | "getBaseUrl" | "getHeaders" | "getClient" | "popularMangaRequest" | "popularMangaParse"
+        | "searchMangaRequest" | "searchMangaParse"
+        | "latestUpdatesRequest" | "latestUpdatesParse"
+        | "mangaDetailsRequest" | "mangaDetailsParse"
+        | "chapterListRequest" | "chapterListParse"
+        | "pageListRequest" | "pageListParse"
+        | "imageUrlRequest" | "imageUrlParse"
+        | "imageRequest" | "headersBuilder"
+        | "setUrlWithoutDomain" | "getMangaUrl" | "getChapterUrl"
+        | "newCall" | "awaitSuccess" | "asObservableSuccess"
+        | "addHeader" | "newCachelessCallWithProgress"
     )
 }
 

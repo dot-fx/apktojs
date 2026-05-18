@@ -2,11 +2,11 @@ pub mod dalvik;
 pub mod emit;
 pub mod resolver;
 
-use crate::extensions::tachiyomi_loader::{ApkMeta, EntryKind, WalkedSource};
 use crate::error::CoreError;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{lift, JsExpr, JsStmt};
-use crate::extensions::tachiyomi_loader::translator::resolver::infer::{InferCtx, SymKey};
+use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{lift, JsStmt};
+use crate::extensions::tachiyomi_loader::translator::resolver::infer::{rename_source_classes, InferCtx, SymKey};
 use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::tachiyomi_loader::{ApkMeta, EntryKind, WalkedSource};
 
 pub struct TranslatedSource {
     pub js: String,
@@ -68,6 +68,7 @@ pub fn translate(
         .collect();
 
     infer_ctx.apply(&mut pool_mut);
+    rename_source_classes(&mut pool_mut, &meta.name);
 
     for ((s, idx), m) in &pool_mut.methods {
         let was = before.get(&(*s, *idx)).and_then(|v| v.as_deref());

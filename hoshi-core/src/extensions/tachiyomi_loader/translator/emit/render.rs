@@ -357,7 +357,6 @@ pub fn render_class(
     out.push_str(&format!("// Kind     : {:?}\n", walked.kind));
     out.push('\n');
 
-    // group methods by defined_in, preserving order of first appearance
     let mut groups: Vec<(String, Vec<&JsMethod>)> = Vec::new();
     for method in methods {
         if let Some(g) = groups.iter_mut().find(|(name, _)| name == &method.defined_in) {
@@ -367,11 +366,18 @@ pub fn render_class(
         }
     }
 
-    // emit helper classes first (everything except the main source class)
+    let walked_class = walked.methods.first()
+        .map(|m| m.defined_in.as_str())
+        .unwrap_or("");
+
+    let is_main = |owner: &str| -> bool {
+        owner == class_name
+            || owner == walked_class
+            || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false)
+    };
+
     for (owner, group_methods) in &groups {
-        let is_main = owner == class_name
-            || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false);
-        if is_main { continue; }
+        if is_main(owner) { continue; }
 
         let simple = owner.split('.').last().unwrap_or(owner);
         out.push_str(&format!("class {} {{\n", simple));
@@ -379,25 +385,14 @@ pub fn render_class(
         out.push_str("}\n\n");
     }
 
-    // emit main source class
-    out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
-    for (owner, group_methods) in &groups {
-        let is_main = owner == class_name
-            || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false);
-        if !is_main { continue; }
-        emit_methods(&mut out, group_methods);
-    }
-    out.push_str("}\n\n");
+    let main_methods: Vec<&JsMethod> = groups.iter()
+        .filter(|(owner, _)| is_main(owner))
+        .flat_map(|(_, ms)| ms.iter().copied())
+        .collect();
 
-    match walked.kind {
-        crate::extensions::tachiyomi_loader::EntryKind::Factory => {
-            out.push_str("// SourceFactory: instantiate variants\n");
-            out.push_str(&format!("registerSources([new {}()]);\n", class_name));
-        }
-        crate::extensions::tachiyomi_loader::EntryKind::Direct => {
-            out.push_str(&format!("registerSource(new {}());\n", class_name));
-        }
-    }
+    out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
+    emit_methods(&mut out, &main_methods);
+    out.push_str("}\n");
 
     out
 }

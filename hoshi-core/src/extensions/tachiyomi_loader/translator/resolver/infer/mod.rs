@@ -9,6 +9,16 @@ use crate::extensions::tachiyomi_loader::translator::resolver::infer::candidates
 use crate::extensions::tachiyomi_loader::translator::resolver::infer::helpers::parse_meth_token;
 use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
+const HTTP_SOURCE_IDENTITY_METHODS: &[&str] = &[
+    "popularMangaRequest", "popularMangaParse",
+    "searchMangaRequest",  "searchMangaParse",
+    "latestUpdatesRequest","latestUpdatesParse",
+    "mangaDetailsParse",   "chapterListParse",
+    "pageListParse",       "imageUrlParse",
+    "chapterListRequest",  "pageListRequest",
+    "baseUrl", "client", "headers", "headersBuilder",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymKey {
     Method(usize, u32),
@@ -432,5 +442,71 @@ impl InferCtx {
 impl Default for InferCtx {
     fn default() -> Self {
         Self { evidence: HashMap::new() }
+    }
+}
+
+pub fn rename_source_classes(pool: &mut Pool, source_name: &str) {
+    eprintln!("source_name passed in: {:?}", source_name);
+    let mut hits: HashMap<String, u32> = HashMap::new();
+    for m in pool.methods.values() {
+        let js = match m.js_name.as_deref() {
+            Some(n) => n,
+            None => continue,
+        };
+        if HTTP_SOURCE_IDENTITY_METHODS.contains(&js) {
+            eprintln!("CLASS HIT: class={} method={}", m.class_name, js);
+            *hits.entry(m.class_name.clone()).or_default() += 1;
+        }
+    }
+    eprintln!("HITS MAP: {:?}", hits);
+
+    for (raw_name, ti) in &pool.type_info {
+        if let Some(ref sc) = ti.superclass {
+            let sc_simple = pool.type_info.get(sc)
+                .map(|t| t.simple_name.as_str())
+                .unwrap_or(sc.as_str());
+            if matches!(sc_simple, "HttpSource" | "ParsedHttpSource") {
+                *hits.entry(raw_name.clone()).or_default() += 2; // strong signal
+            }
+        }
+    }
+
+    // 3. Collect classes that cross the threshold (≥2 hits).
+    let to_rename: Vec<String> = hits.into_iter()
+        .filter(|(_, count)| *count >= 1)
+        .map(|(name, _)| name)
+        .collect();
+
+    for old_name in &to_rename {
+        // Derive the new name from type_info.simple_name if available,
+        // otherwise just strip the obfuscated short name and leave it for
+        // the caller to handle — at minimum we know it's an HttpSource subclass.
+        let new_name = pool.type_info.get(old_name)
+            .map(|ti| ti.simple_name.clone())
+            .filter(|n| n != old_name && !n.is_empty())
+            .unwrap_or_else(|| source_name.to_string()); // use meta.name as fallback
+
+        eprintln!("TYPE_INFO for l0: {:?}", pool.type_info.get("l0"));
+
+        eprintln!("RENAME: {} -> {}", old_name, new_name);
+
+        if new_name == *old_name { continue; }
+
+        // 4. Rewrite class_name on every MethodInfo and FieldInfo.
+        for m in pool.methods.values_mut() {
+            if m.class_name == *old_name {
+                m.class_name = new_name.clone();
+            }
+        }
+        for f in pool.fields.values_mut() {
+            if f.class_name == *old_name {
+                f.class_name = new_name.clone();
+            }
+        }
+
+        // 5. Re-key type_info so lookups still work.
+        if let Some(ti) = pool.type_info.remove(old_name) {
+            pool.type_info.insert(new_name.clone(), ti);
+        }
     }
 }
