@@ -47,6 +47,8 @@ pub enum JsStmt {
     Comment(String),
     CondGoto { cond: JsExpr, target: i32 },
     Goto(i32),
+    StaticSet { class: String, field: String, value: JsExpr },
+    StaticGet { class: String, field: String, dst: u8 },
     Throw,
 }
 

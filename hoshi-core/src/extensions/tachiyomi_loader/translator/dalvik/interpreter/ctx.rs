@@ -179,18 +179,45 @@ impl<'a> LiftCtx<'a> {
             }
 
             Insn::SGet(d, fi) | Insn::SGetObject(d, fi) | Insn::SGetBoolean(d, fi) => {
-                let field = self.field_ref(*fi);
-
-                self.set(
-                    *d,
-                    JsExpr::Raw(format!("this.constructor.{}", field)),
-                    off
-                );
+                if let Some(f) = self.pool.fields.get(&(self.dex_shard, *fi)) {
+                    let expr = JsExpr::FieldGet {
+                        receiver: Box::new(JsExpr::Raw(f.class_name.clone())),
+                        field: f.field_name.clone(),
+                    };
+                    self.set(*d, expr, off);
+                } else {
+                    self.warn(format!("sget: unknown field #{}", fi));
+                    self.set(*d, JsExpr::Raw(format!("/* unknown field #{} */", fi)), off);
+                }
             }
 
-            Insn::SPut(src, fi) | Insn::SPutObject(src, fi) => {
+            Insn::SPut(src, fi) | Insn::SPutObject(src, fi)
+            | Insn::SPutBoolean(src, fi) | Insn::SPutByte(src, fi)
+            | Insn::SPutChar(src, fi) | Insn::SPutShort(src, fi) => {
                 let value = self.reg(*src);
-                self.push(off, JsStmt::Comment(format!("/* sput #{}: {} */", fi, render::expr_to_js(&value))));
+                if let Some(f) = self.pool.fields.get(&(self.dex_shard, *fi)) {
+                    self.push(off, JsStmt::StaticSet {
+                        class: f.class_name.clone(),
+                        field: f.field_name.clone(),
+                        value,
+                    });
+                } else {
+                    self.warn(format!("sput: unknown field #{}", fi));
+                }
+            }
+
+            Insn::SGet(d, fi) | Insn::SGetObject(d, fi) | Insn::SGetBoolean(d, fi) => {
+                if let Some(f) = self.pool.fields.get(&(self.dex_shard, *fi)) {
+                    self.push(off, JsStmt::StaticGet {
+                        class: f.class_name.clone(),
+                        field: f.field_name.clone(),
+                        dst: *d,
+                    });
+                    self.regs.insert(*d, JsExpr::Reg(*d));
+                } else {
+                    self.warn(format!("sget: unknown field #{}", fi));
+                    self.set(*d, JsExpr::Raw(format!("/* unknown field #{} */", fi)), off);
+                }
             }
 
             // Calls

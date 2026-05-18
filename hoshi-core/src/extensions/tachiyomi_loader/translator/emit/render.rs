@@ -177,6 +177,18 @@ fn render_stmts(
                 }
             }
 
+            JsStmt::StaticGet { class, field, dst } => {
+                if declared.insert(*dst) {
+                    lines.push(format!("{}let v{} = {}.{};", pad, dst, class, field));
+                } else {
+                    lines.push(format!("{}v{} = {}.{};", pad, dst, class, field));
+                }
+            }
+
+            JsStmt::StaticSet { class, field, value } => {
+                lines.push(format!("{}{}.{} = {};", pad, class, field, expr_to_js(value)));
+            }
+
             JsStmt::FieldSet { receiver, field, value } => {
                 lines.push(format!("{}{}.{} = {};",
                                    pad, expr_to_js(receiver), field, expr_to_js(value)));

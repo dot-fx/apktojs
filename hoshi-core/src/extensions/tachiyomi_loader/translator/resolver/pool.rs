@@ -41,6 +41,11 @@ pub struct TypeInfo {
 }
 
 impl Pool {
+
+    pub fn field(&self, shard: usize, fi: u32) -> Option<&FieldInfo> {
+        self.fields.get(&(shard, fi))
+    }
+    
     pub fn build(shards: &[Dex<Vec<u8>>]) -> Self {
         let mut strings = HashMap::new();
         let mut methods = HashMap::new();
