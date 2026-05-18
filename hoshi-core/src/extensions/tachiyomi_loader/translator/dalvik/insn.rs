@@ -201,6 +201,35 @@ pub enum Insn {
     Monitor(u8, bool),
     Throw(u8),
 
+    RemFloat(u8, u8, u8),
+    RemDouble(u8, u8, u8),
+    IGetByte(u8, u8, u32),
+    IGetChar(u8, u8, u32),
+    IGetShort(u8, u8, u32),
+    IPutByte(u8, u8, u32),
+    IPutChar(u8, u8, u32),
+    IPutShort(u8, u8, u32),
+
+    XorInt2Addr(u8, u8),
+    ShlInt2Addr(u8, u8),
+    ShrInt2Addr(u8, u8),
+    UshrInt2Addr(u8, u8),
+    AddFloat2Addr(u8, u8),
+    SubFloat2Addr(u8, u8),
+    MulFloat2Addr(u8, u8),
+    DivFloat2Addr(u8, u8),
+    RemFloat2Addr(u8, u8),
+    AddDouble2Addr(u8, u8),
+    SubDouble2Addr(u8, u8),
+    MulDouble2Addr(u8, u8),
+    DivDouble2Addr(u8, u8),
+    RemDouble2Addr(u8, u8),
+
+    RemIntLit16(u8, u8, i16),
+    DivIntLit16(u8, u8, i16),
+    RsubIntLit16(u8, u8, i16),
+    XorIntLit16(u8, u8, i16),
+
     Unknown(u16),
 }
 

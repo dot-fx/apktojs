@@ -178,7 +178,8 @@ pub static CANDIDATES: &[Candidate] = &[
     Candidate {
         name: "cursor",
         signals: &[
-            Signal { kind_tag: SignalTag::FlowsIntoSetter("this", "g"), weight: 1.0 },
+            Signal { kind_tag: SignalTag::NullChecked, weight: 0.5 },
+            Signal { kind_tag: SignalTag::AppearsAfterStringLiteral("cursor"), weight: 0.9 },
             Signal { kind_tag: SignalTag::NullChecked, weight: 0.5 },
             Signal { kind_tag: SignalTag::GetterShaped, weight: 0.1 },
         ],
@@ -191,6 +192,7 @@ pub static CANDIDATES: &[Candidate] = &[
             Signal { kind_tag: SignalTag::ResultPushedToList,              weight: 0.5 },
             Signal { kind_tag: SignalTag::CalledOnIteratorNext,            weight: 0.5 },
             Signal { kind_tag: SignalTag::PassedToKnown("push", 0),       weight: 0.4 },
+            Signal { kind_tag: SignalTag::ResultPushedToList, weight: 0.9 },
         ],
     },
     Candidate {
@@ -283,8 +285,9 @@ pub static CANDIDATES: &[Candidate] = &[
     Candidate {
         name: "translationCompleted",
         signals: &[
-            Signal { kind_tag: SignalTag::NullChecked,  weight: 1.0 },
-            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+            Signal { kind_tag: SignalTag::NullChecked, weight: 1.0 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.5 },
+            Signal { kind_tag: SignalTag::ComparedToIntLiteral, weight: 0.5 },
         ],
     },
     Candidate {
@@ -348,6 +351,55 @@ pub static CANDIDATES: &[Candidate] = &[
             Signal { kind_tag: SignalTag::Iterated,                                    weight: 0.2 },
             Signal { kind_tag: SignalTag::PassedToKnown("collectionSizeOrDefault", 0), weight: 0.3 },
             Signal { kind_tag: SignalTag::GetterShaped,                                weight: 0.05 },
+        ],
+    },
+
+    Candidate {
+        name: "dateFormat",
+        signals: &[
+            Signal { kind_tag: SignalTag::PassedToKnown("tryParse", 0), weight: 1.0 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+        ],
+    },
+    Candidate {
+        name: "preferences",
+        signals: &[
+            Signal { kind_tag: SignalTag::ReceiverOf("getString"), weight: 0.9 },
+            Signal { kind_tag: SignalTag::ReceiverOf("getBoolean"), weight: 0.9 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+        ],
+    },
+    Candidate {
+        name: "siteLang",
+        signals: &[
+            Signal { kind_tag: SignalTag::AppearsAfterStringLiteral("lang="), weight: 1.0 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+        ],
+    },
+
+    Candidate {
+        name: "baseUrl",
+        signals: &[
+            Signal { kind_tag: SignalTag::AppearsBeforeStringLiteral("/api/comics/"), weight: 1.0 },
+            Signal { kind_tag: SignalTag::AppearsBeforeStringLiteral("/api/search"), weight: 1.0 },
+            Signal { kind_tag: SignalTag::AppearsBeforeStringLiteral("/comic/"), weight: 0.9 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+        ],
+    },
+    Candidate {
+        name: "client",
+        signals: &[
+            Signal { kind_tag: SignalTag::ReceiverOf("newBuilder"), weight: 0.9 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.05 },
+        ],
+    },
+
+    Candidate {
+        name: "selected",
+        signals: &[
+            Signal { kind_tag: SignalTag::NullChecked, weight: 1.0 },
+            Signal { kind_tag: SignalTag::PassedToKnown("addQueryParameter", 1), weight: 1.0 },
+            Signal { kind_tag: SignalTag::GetterShaped, weight: 0.1 },
         ],
     },
 ];

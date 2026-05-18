@@ -37,7 +37,7 @@ pub fn translate(
     let mut warnings   = Vec::new();
     let mut js_methods = Vec::new();
 
-    let mut lifted: Vec<(Vec<JsStmt>, String)> = Vec::new();
+    let mut lifted: Vec<(Vec<JsStmt>, String, String)> = Vec::new();
 
     for method in &walked.methods {
         let decoded  = dalvik::decode(&method.insns);
@@ -50,13 +50,17 @@ pub fn translate(
         );
 
         warnings.append(&mut w);
-        lifted.push((stmts, method.name.clone()));
+        lifted.push((
+            stmts,
+            method.name.clone(),
+            method.defined_in.clone(),
+        ));
     }
 
     let mut pool_mut = pool.clone();
     let mut infer_ctx = InferCtx::default();
 
-    for (stmts, _) in &lifted {
+    for (stmts, _, _) in &lifted {
         infer_ctx.scan_stmts(stmts, &pool_mut, walked.dex_shard);
     }
     let before: std::collections::HashMap<(usize, u32), Option<String>> = pool_mut.methods.iter()
@@ -74,11 +78,13 @@ pub fn translate(
         }
     }
 
-    for (stmts, method_name) in &lifted {
+    for (stmts, method_name, defined_in) in &lifted {
         let body = emit::render::stmts_to_js(stmts, 4, method_name);
+
         js_methods.push(emit::render::JsMethod {
             name: method_name.clone(),
             body,
+            defined_in: defined_in.clone(),
         });
     }
 

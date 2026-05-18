@@ -7,6 +7,7 @@ use crate::extensions::tachiyomi_loader::translator::emit::params::method_params
 pub struct JsMethod {
     pub name: String,
     pub body: String,
+    pub defined_in: String,
 }
 
 pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, method_name: &str) -> String {
@@ -92,10 +93,16 @@ fn escape_js_string(s: &str) -> String {
 }
 
 fn render_method_name(name: &str) -> String {
-    if is_valid_js_ident(name) {
-        name.to_string()
-    } else {
-        format!("[\"{}\"]", escape_js_string(name))
+    match name {
+        "<init>"   => "constructor".to_string(),
+        "<clinit>" => "__static_init__".to_string(),
+        _ => {
+            if is_valid_js_ident(name) {
+                name.to_string()
+            } else {
+                format!("[\"{}\"]", escape_js_string(name))
+            }
+        }
     }
 }
 
@@ -330,26 +337,6 @@ pub fn render_class(
 ) -> String {
     let mut out = String::new();
 
-    let base_url = methods.iter()
-        .find(|m| m.name == "getBaseUrl" || m.name == "baseUrl")
-        .and_then(|m| {
-            // body is just `    return "https://...";`
-            let trimmed = m.body.trim();
-            if trimmed.starts_with("return \"") && trimmed.ends_with("\";") {
-                Some(trimmed
-                    .trim_start_matches("return \"")
-                    .trim_end_matches("\";")
-                    .to_string())
-            } else {
-                None
-            }
-        });
-
-    let base_url_line = match base_url {
-        Some(url) => format!("  get baseUrl() {{ return \"{}\"; }}\n", url),
-        None => "  get baseUrl() { return /* TODO: fill in baseUrl */\"\"; }\n".to_string(),
-    };
-
     out.push_str("// AUTO-GENERATED - Tachiyomi extension translator\n");
     out.push_str(&format!("// Package  : {}\n", meta.package));
     out.push_str(&format!("// Name     : {} (lang: {})\n", meta.name, meta.lang));
@@ -358,15 +345,53 @@ pub fn render_class(
     out.push_str(&format!("// Kind     : {:?}\n", walked.kind));
     out.push('\n');
 
-    out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
-    out.push_str(&format!("  get name()    {{ return {:?}; }}\n", meta.name));
-    out.push_str(&format!("  get lang()    {{ return {:?}; }}\n", meta.lang));
-    out.push_str(&base_url_line);
-    if meta.nsfw {
-        out.push_str("  // nsfw = true\n");
+    // group methods by defined_in, preserving order of first appearance
+    let mut groups: Vec<(String, Vec<&JsMethod>)> = Vec::new();
+    for method in methods {
+        if let Some(g) = groups.iter_mut().find(|(name, _)| name == &method.defined_in) {
+            g.1.push(method);
+        } else {
+            groups.push((method.defined_in.clone(), vec![method]));
+        }
     }
-    out.push('\n');
 
+    // emit helper classes first (everything except the main source class)
+    for (owner, group_methods) in &groups {
+        let is_main = owner == class_name
+            || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false);
+        if is_main { continue; }
+
+        let simple = owner.split('.').last().unwrap_or(owner);
+        out.push_str(&format!("class {} {{\n", simple));
+        emit_methods(&mut out, group_methods);
+        out.push_str("}\n\n");
+    }
+
+    // emit main source class
+    out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
+    for (owner, group_methods) in &groups {
+        let is_main = owner == class_name
+            || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false);
+        if !is_main { continue; }
+        emit_methods(&mut out, group_methods);
+    }
+    out.push_str("}\n\n");
+
+    match walked.kind {
+        crate::extensions::tachiyomi_loader::EntryKind::Factory => {
+            out.push_str("// SourceFactory: instantiate variants\n");
+            out.push_str(&format!("registerSources([new {}()]);\n", class_name));
+        }
+        crate::extensions::tachiyomi_loader::EntryKind::Direct => {
+            out.push_str(&format!("registerSource(new {}());\n", class_name));
+        }
+    }
+
+    out
+}
+
+fn emit_methods(out: &mut String, methods: &[&JsMethod]) {
+    out.push('\n');
     for method in methods {
         let params = method_params(&method.name);
         out.push_str(&format!(
@@ -382,20 +407,6 @@ pub fn render_class(
         }
         out.push_str("  }\n\n");
     }
-
-    out.push_str("}\n\n");
-
-    match walked.kind {
-        crate::extensions::tachiyomi_loader::EntryKind::Factory => {
-            out.push_str("// SourceFactory: instantiate variants then call registerSources([...])\n");
-            out.push_str(&format!("registerSources([new {}()]);\n", class_name));
-        }
-        crate::extensions::tachiyomi_loader::EntryKind::Direct => {
-            out.push_str(&format!("registerSource(new {}());\n", class_name));
-        }
-    }
-
-    out
 }
 
 pub fn expr_to_js(expr: &JsExpr) -> String {

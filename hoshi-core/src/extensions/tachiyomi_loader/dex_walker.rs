@@ -3,6 +3,7 @@ use dex::Dex;
 use crate::error::CoreError;
 use crate::extensions::tachiyomi_loader::{ApkMeta, ExtractedDex};
 use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn;
+use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
 const HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/HttpSource;";
@@ -11,22 +12,6 @@ const PARSED_HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/ParsedHttpS
 /// DEX type descriptor for SourceFactory.
 const SOURCE_FACTORY: &str = "Leu/kanade/tachiyomi/source/SourceFactory;";
 const CREATE_SOURCES: &str = "createSources";
-
-
-const SOURCE_METHODS: &[&str] = &[
-    "popularMangaRequest",
-    "popularMangaParse",
-    "latestUpdatesRequest",
-    "latestUpdatesParse",
-    "searchMangaRequest",
-    "searchMangaParse",
-    "mangaDetailsParse",
-    "chapterListRequest",
-    "chapterListParse",
-    "pageListParse",
-    "imageUrlParse",
-    "getFilterList",
-];
 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +59,7 @@ impl From<WalkError> for CoreError {
     }
 }
 
-pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSource, WalkError> {
+pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Result<WalkedSource, WalkError> {
     let fq_class = resolve_ext_class(&meta.package, &meta.ext_class);
     let descriptor = to_dex_descriptor(&fq_class);
 
@@ -82,7 +67,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSou
         find_class_in_shards(&extracted.dex_files, &descriptor)
             .ok_or_else(|| WalkError::ClassNotFound(fq_class.clone()))?;
 
-    let kind = detect_kind(&entry_class)?;
+    let kind = detect_kind(&entry_class, shard, &extracted.dex_files)?;
 
     let mut hierarchy  = Vec::new();
     let mut methods    = Vec::new();
@@ -121,6 +106,90 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta) -> Result<WalkedSou
 
     if hierarchy.is_empty() {
         return Err(WalkError::NotASource(fq_class.clone()));
+    }
+
+    let mut all_methods_to_scan = methods.clone();
+    let mut helper_seen_classes: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    loop {
+        let mut referenced_descs: Vec<String> = Vec::new();
+
+        for method in &all_methods_to_scan {
+            let decoded = crate::extensions::tachiyomi_loader::translator::dalvik::decode(&method.insns);
+            for d in &decoded {
+                match &d.insn {
+                    Insn::SGet(_, field_idx)
+                    | Insn::SGetObject(_, field_idx)
+                    | Insn::SGetBoolean(_, field_idx)
+                    | Insn::SPut(_, field_idx)
+                    | Insn::SPutObject(_, field_idx)
+                    | Insn::SPutBoolean(_, field_idx)
+                    | Insn::SPutByte(_, field_idx)
+                    | Insn::SPutChar(_, field_idx)
+                    | Insn::SPutShort(_, field_idx) => {
+                        for s in 0..16 {
+                            if let Some(field_info) = pool.fields.get(&(s, *field_idx)) {
+                                let desc = format!("L{};", field_info.class_name.replace('.', "/"));
+                                referenced_descs.push(desc);
+                                break;
+                            }
+                        }
+                    }
+                    Insn::InvokeStatic { method_idx, .. }
+                    | Insn::InvokeStaticRange { method_idx, .. } => {
+                        for s in 0..16 {
+                            if let Some(m) = pool.methods.get(&(s, *method_idx)) {
+                                let desc = format!("L{};", m.class_name.replace('.', "/"));
+                                referenced_descs.push(desc);
+                                break;
+                            }
+                        }
+                    }
+                    Insn::NewInstance(_, idx)
+                    | Insn::ConstClass(_, idx) => {
+                        for s in &extracted.dex_files {
+                            if let Ok(t) = s.get_type(*idx) {
+                                referenced_descs.push(t.to_string());
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut new_methods: Vec<SourceMethod> = Vec::new();
+        let mut found_any = false;
+
+        for desc in referenced_descs {
+            let fq = from_dex_descriptor(&desc);
+            if fq.starts_with("java.")
+                || fq.starts_with("kotlin.")
+                || fq.starts_with("android.")
+                || fq.starts_with("androidx.")
+                || fq.starts_with("eu.kanade.tachiyomi.")
+                || hierarchy.contains(&fq)
+                || helper_seen_classes.contains(&fq)
+            {
+                continue;
+            }
+            helper_seen_classes.insert(fq.clone());
+            if let Some((helper_class, _, helper_shard)) =
+                find_class_in_shards(&extracted.dex_files, &desc)
+            {
+                let mut helper_seen = std::collections::HashSet::new();
+                walk_hierarchy(
+                    &helper_class, helper_shard, &extracted.dex_files,
+                    &mut hierarchy, &mut new_methods, &mut helper_seen, 0,
+                );
+                found_any = true;
+            }
+        }
+
+        if !found_any { break; }
+        all_methods_to_scan = new_methods.clone();
+        methods.extend(new_methods);
     }
 
     Ok(WalkedSource {
@@ -216,18 +285,70 @@ fn find_class_in_shards<'a>(
         if let Ok(Some(class)) = shard.find_class_by_name(descriptor) {
             return Some((class, idx, shard));
         }
+        for class in shard.classes() {
+            if let Ok(class) = class {
+                if class.jtype().to_string() == descriptor {
+                    return Some((class, idx, shard));
+                }
+            }
+        }
     }
     None
 }
 
-fn detect_kind(class: &dex::class::Class) -> Result<EntryKind, WalkError> {
+fn detect_kind(
+    class: &dex::class::Class,
+    shard: &Dex<Vec<u8>>,
+    all_shards: &[Dex<Vec<u8>>],
+) -> Result<EntryKind, WalkError> {
     for iface in class.interfaces() {
         if iface.to_string() == SOURCE_FACTORY {
             return Ok(EntryKind::Factory);
         }
     }
 
-    Ok(EntryKind::Direct)
+    if extends_http_source(class, shard, all_shards, 0) {
+        return Ok(EntryKind::Direct);
+    }
+
+    Err(WalkError::NotASource(
+        from_dex_descriptor(&class.jtype().to_string())
+    ))
+}
+
+fn extends_http_source(
+    class: &dex::class::Class,
+    shard: &Dex<Vec<u8>>,
+    all_shards: &[Dex<Vec<u8>>],
+    depth: usize,
+) -> bool {
+    if depth > 8 {
+        return false;
+    }
+
+    let super_id = match class.super_class() {
+        Some(id) => id,
+        None => return false,
+    };
+
+    let super_desc = match shard.get_type(super_id) {
+        Ok(t) => t.to_string(),
+        Err(_) => return false,
+    };
+
+    if super_desc == HTTP_SOURCE || super_desc == PARSED_HTTP_SOURCE {
+        return true;
+    }
+
+    let found = find_class_in_shards(std::slice::from_ref(shard), &super_desc)
+        .or_else(|| find_class_in_shards(all_shards, &super_desc));
+
+    match found {
+        Some((super_class, _, super_shard)) => {
+            extends_http_source(&super_class, super_shard, all_shards, depth + 1)
+        }
+        None => false,
+    }
 }
 
 fn walk_hierarchy(
@@ -259,9 +380,6 @@ fn walk_hierarchy(
     for method in class.virtual_methods().iter().chain(class.direct_methods().iter()) {
         let name = method.name().to_string();
 
-        if !SOURCE_METHODS.contains(&name.as_str()) {
-            continue;
-        }
         if seen.contains(&name) {
             continue;
         }

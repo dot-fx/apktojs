@@ -20,7 +20,38 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
         }
 
         let insn = match op {
-            0x00 => { pc += 1; Insn::Nop },
+            0x00 => {
+                match hi {
+                    0x01 => {
+                        // packed-switch-payload — skip it entirely
+                        // word[1] = size, word[2..3] = first_key, word[4..4+size*2] = targets
+                        let size = next!() as usize;
+                        next!(); next!(); // first_key (i32)
+                        for _ in 0..size { next!(); next!(); } // targets (i32 each)
+                        pc += 1;
+                        Insn::Nop
+                    }
+                    0x02 => {
+                        // sparse-switch-payload
+                        let size = next!() as usize;
+                        for _ in 0..size * 2 { next!(); next!(); } // keys[] then targets[], each i32
+                        pc += 1;
+                        Insn::Nop
+                    }
+                    0x03 => {
+                        // fill-array-data-payload
+                        let element_width = next!() as usize;
+                        let size_lo = next!() as usize;
+                        let size_hi = next!() as usize;
+                        let size = (size_hi << 16) | size_lo;
+                        let data_words = (size * element_width + 1) / 2;
+                        for _ in 0..data_words { next!(); }
+                        pc += 1;
+                        Insn::Nop
+                    }
+                    _ => { pc += 1; Insn::Nop }
+                }
+            }
 
             // move vA, vB  (4-bit regs, hi encodes both)
             0x01 => { let i = Insn::Move   (hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
@@ -342,6 +373,8 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
             0xA5 => { let w = next!(); let i = three_regs(hi, w, |a,b,c| Insn::SubDouble(a,b,c)); pc += 1; i }
             0xA6 => { let w = next!(); let i = three_regs(hi, w, |a,b,c| Insn::MulDouble(a,b,c)); pc += 1; i }
             0xA7 => { let w = next!(); let i = three_regs(hi, w, |a,b,c| Insn::DivDouble(a,b,c)); pc += 1; i }
+            0xAE => { let w = next!(); let i = three_regs(hi,w,|a,b,c| Insn::RemFloat(a,b,c));  pc+=1; i }
+            0xAF => { let w = next!(); let i = three_regs(hi,w,|a,b,c| Insn::RemDouble(a,b,c)); pc+=1; i }
 
             // 2addr (12x format: dst/src1 = vA, src2 = vB)
             0xB0 => { let i = Insn::AddInt2Addr(hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
@@ -351,14 +384,42 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
             0xB4 => { let i = Insn::RemInt2Addr(hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
             0xB5 => { let i = Insn::AndInt2Addr(hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
             0xB6 => { let i = Insn::OrInt2Addr (hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
+            0xB7 => { let i = Insn::XorInt2Addr   (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xB8 => { let i = Insn::ShlInt2Addr   (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xB9 => { let i = Insn::ShrInt2Addr   (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBA => { let i = Insn::UshrInt2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBB => { let i = Insn::AddLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBC => { let i = Insn::SubLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBD => { let i = Insn::MulLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBE => { let i = Insn::DivLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xBF => { let i = Insn::RemLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
 
+            0xC0 => { let i = Insn::AndLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC1 => { let i = Insn::OrLong2Addr   (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC2 => { let i = Insn::XorLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC3 => { let i = Insn::ShlLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC4 => { let i = Insn::ShrLong2Addr  (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC5 => { let i = Insn::UshrLong2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC6 => { let i = Insn::AddFloat2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC7 => { let i = Insn::SubFloat2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC8 => { let i = Insn::MulFloat2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xC9 => { let i = Insn::DivFloat2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xCA => { let i = Insn::RemFloat2Addr (hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xCB => { let i = Insn::AddDouble2Addr(hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xCC => { let i = Insn::SubDouble2Addr(hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xCE => { let i = Insn::DivDouble2Addr(hi&0xF,(hi>>4)&0xF); pc+=1; i }
+            0xCF => { let i = Insn::RemDouble2Addr(hi&0xF,(hi>>4)&0xF); pc+=1; i }
             0xCD => { let i = Insn::MulLong2Addr(hi & 0xF, (hi >> 4) & 0xF); pc += 1; i }
 
             // lit16 / lit8
             0xD0 => { let w = next!() as i16; let i = Insn::AddIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD1 => { let w = next!() as i16; let i = Insn::RsubIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD2 => { let w = next!() as i16; let i = Insn::MulIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD3 => { let w = next!() as i16; let i = Insn::DivIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD4 => { let w = next!() as i16; let i = Insn::AndIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD5 => { let w = next!() as i16; let i = Insn::RemIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD6 => { let w = next!() as i16; let i = Insn::OrIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD7 => { let w = next!() as i16; let i = Insn::XorIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
 
             0xD8 => { let w = next!(); let i = Insn::AddIntLit8 (hi, (w & 0xFF) as u8, (w >> 8) as i8); pc += 1; i }
             0xD9 => { let w = next!(); let i = Insn::RsubIntLit8(hi, (w & 0xFF) as u8, (w >> 8) as i8); pc += 1; i }
