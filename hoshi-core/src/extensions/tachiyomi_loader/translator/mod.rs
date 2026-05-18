@@ -80,7 +80,21 @@ pub fn translate(
     }
 
     for (stmts, method_name, defined_in) in &lifted {
-        let body = emit::render::stmts_to_js(stmts, 4, method_name);
+        let has_super = pool.type_info.get(defined_in)
+            .and_then(|t| t.superclass.as_deref())
+            .map(|s|
+                s != "Object"
+                    && s != "java.lang.Object"
+                    && !s.ends_with(".Object")
+            )
+            .unwrap_or(false);
+
+        let body = emit::render::stmts_to_js(
+            stmts,
+            4,
+            method_name,
+            has_super,
+        );
 
         js_methods.push(emit::render::JsMethod {
             name: method_name.clone(),
@@ -113,7 +127,7 @@ pub fn translate(
     }
 
     let raw_js = emit::render::render_class(
-        &meta.name, base_class, meta, &js_methods, walked,
+        &meta.name, base_class, meta, &js_methods, walked, &pool_mut
     );
 
     let resolved = resolver::resolve::resolve(&raw_js, &pool_mut);

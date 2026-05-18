@@ -414,7 +414,7 @@ impl<'a> LiftCtx<'a> {
             Insn::NewArray(d, len_reg, _type_idx) => {
                 let len = self.reg(*len_reg);
                 self.set(*d, JsExpr::Raw(
-                    format!("new Array({})", render::expr_to_js(&len))
+                    format!("new Array({})", render::expr_to_js(&len, true))
                 ), off);
             }
 
@@ -453,7 +453,7 @@ impl<'a> LiftCtx<'a> {
                 self.set(*d, JsExpr::Raw(
                     format!(
                         "({} instanceof {})",
-                        render::expr_to_js(&oe),
+                        render::expr_to_js(&oe, true),
                         ty
                     )
                 ), off);
@@ -580,7 +580,7 @@ impl<'a> LiftCtx<'a> {
             }
             Insn::IntToChar(d, s) => {
                 let e = self.reg(*s);
-                self.set(*d, JsExpr::Raw(format!("String.fromCharCode({})", render::expr_to_js(&e))), off);
+                self.set(*d, JsExpr::Raw(format!("String.fromCharCode({})", render::expr_to_js(&e, true))), off);
             }
 
             Insn::AddInt(d,a,b)|Insn::AddLong(d,a,b)|Insn::AddFloat(d,a,b)|Insn::AddDouble(d,a,b)
@@ -635,19 +635,19 @@ impl<'a> LiftCtx<'a> {
             |Insn::CmplDouble(d,a,b)|Insn::CmpgDouble(d,a,b) => {
                 let ae = self.reg(*a); let be = self.reg(*b);
                 self.set(*d, JsExpr::Raw(
-                    format!("Math.sign({} - {})", render::expr_to_js(&ae), render::expr_to_js(&be))
+                    format!("Math.sign({} - {})", render::expr_to_js(&ae, true), render::expr_to_js(&be, true))
                 ), off);
             }
 
             Insn::Throw(r) => {
                 let e = self.reg(*r);
-                self.push(off, JsStmt::Expr(JsExpr::Raw(format!("throw {}", render::expr_to_js(&e)))));
+                self.push(off, JsStmt::Expr(JsExpr::Raw(format!("throw {}", render::expr_to_js(&e, true)))));
             }
 
             Insn::FillArrayData(arr, _) => {
                 let ae = self.reg(*arr);
                 self.push(off, JsStmt::Comment(
-                    format!("// fill_array_data({}) /* TODO */", render::expr_to_js(&ae))
+                    format!("// fill_array_data({}) /* TODO */", render::expr_to_js(&ae, true))
                 ));
             }
 
