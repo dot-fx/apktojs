@@ -445,8 +445,7 @@ impl Default for InferCtx {
     }
 }
 
-pub fn rename_source_classes(pool: &mut Pool, source_name: &str) {
-    eprintln!("source_name passed in: {:?}", source_name);
+pub fn rename_source_classes(pool: &mut Pool, source_name: &str) -> HashMap<String, String> {
     let mut hits: HashMap<String, u32> = HashMap::new();
     for m in pool.methods.values() {
         let js = match m.js_name.as_deref() {
@@ -454,11 +453,9 @@ pub fn rename_source_classes(pool: &mut Pool, source_name: &str) {
             None => continue,
         };
         if HTTP_SOURCE_IDENTITY_METHODS.contains(&js) {
-            eprintln!("CLASS HIT: class={} method={}", m.class_name, js);
             *hits.entry(m.class_name.clone()).or_default() += 1;
         }
     }
-    eprintln!("HITS MAP: {:?}", hits);
 
     for (raw_name, ti) in &pool.type_info {
         if let Some(ref sc) = ti.superclass {
@@ -466,33 +463,27 @@ pub fn rename_source_classes(pool: &mut Pool, source_name: &str) {
                 .map(|t| t.simple_name.as_str())
                 .unwrap_or(sc.as_str());
             if matches!(sc_simple, "HttpSource" | "ParsedHttpSource") {
-                *hits.entry(raw_name.clone()).or_default() += 2; // strong signal
+                *hits.entry(raw_name.clone()).or_default() += 2;
             }
         }
     }
 
-    // 3. Collect classes that cross the threshold (≥2 hits).
     let to_rename: Vec<String> = hits.into_iter()
         .filter(|(_, count)| *count >= 1)
         .map(|(name, _)| name)
         .collect();
 
+    let mut renames = HashMap::new();
+
     for old_name in &to_rename {
-        // Derive the new name from type_info.simple_name if available,
-        // otherwise just strip the obfuscated short name and leave it for
-        // the caller to handle — at minimum we know it's an HttpSource subclass.
         let new_name = pool.type_info.get(old_name)
             .map(|ti| ti.simple_name.clone())
             .filter(|n| n != old_name && !n.is_empty())
-            .unwrap_or_else(|| source_name.to_string()); // use meta.name as fallback
-
-        eprintln!("TYPE_INFO for l0: {:?}", pool.type_info.get("l0"));
-
-        eprintln!("RENAME: {} -> {}", old_name, new_name);
+            .unwrap_or_else(|| source_name.to_string());
 
         if new_name == *old_name { continue; }
+        renames.insert(old_name.clone(), new_name.clone());
 
-        // 4. Rewrite class_name on every MethodInfo and FieldInfo.
         for m in pool.methods.values_mut() {
             if m.class_name == *old_name {
                 m.class_name = new_name.clone();
@@ -504,9 +495,9 @@ pub fn rename_source_classes(pool: &mut Pool, source_name: &str) {
             }
         }
 
-        // 5. Re-key type_info so lookups still work.
         if let Some(ti) = pool.type_info.remove(old_name) {
             pool.type_info.insert(new_name.clone(), ti);
         }
     }
+    renames
 }

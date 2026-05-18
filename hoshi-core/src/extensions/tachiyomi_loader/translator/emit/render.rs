@@ -328,6 +328,7 @@ pub fn render_class(
     methods:     &[JsMethod],
     walked:      &WalkedSource,
     pool: &Pool,
+    old_names:   &[String],
 ) -> String {
     let mut out = String::new();
 
@@ -395,7 +396,8 @@ pub fn render_class(
             )
             .unwrap_or(false);
 
-        emit_methods(&mut out, group_methods, has_super);
+        emit_methods(&mut out, group_methods, has_super, owner, class_name, &old_names, false);
+
         out.push_str("}\n\n");
     }
 
@@ -405,13 +407,22 @@ pub fn render_class(
         .collect();
 
     out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
-    emit_methods(&mut out, &main_methods, has_super);
+    emit_methods(&mut out, &main_methods, has_super, class_name, class_name, &old_names, true);
+
     out.push_str("}\n");
 
     out
 }
 
-fn emit_methods(out: &mut String, methods: &[&JsMethod], has_super: bool,) {
+fn emit_methods(
+    out: &mut String,
+    methods: &[&JsMethod],
+    has_super: bool,
+    owner_class: &str,
+    main_class: &str,
+    old_names: &[String],
+    is_self: bool
+) {
     out.push('\n');
     for method in methods {
         let mut max_arg: Option<usize> = None;
@@ -444,6 +455,8 @@ fn emit_methods(out: &mut String, methods: &[&JsMethod], has_super: bool,) {
                 b
             }
         };
+
+        let body = fix_self_refs(&body, owner_class, main_class, old_names, is_self);
 
         out.push_str(&format!(
             "  {}({}) {{\n",
@@ -556,4 +569,18 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
             format!("{}[{}]", expr_to_js(arr, has_super), expr_to_js(idx, has_super))
         }
     }
+}
+
+fn fix_self_refs(body: &str, owner_class: &str, main_class: &str, old_names: &[String], is_self: bool) -> String {
+    let mut out = body.to_string();
+
+    for old in old_names {
+        out = out.replace(&format!("{}.", old), &format!("{}.", main_class));
+    }
+
+    if is_self {
+        out = out.replace(&format!("{}.", owner_class), "this.");
+    }
+
+    out
 }

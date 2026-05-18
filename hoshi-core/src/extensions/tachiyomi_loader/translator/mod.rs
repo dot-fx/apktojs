@@ -68,7 +68,8 @@ pub fn translate(
         .collect();
 
     infer_ctx.apply(&mut pool_mut);
-    rename_source_classes(&mut pool_mut, &meta.name);
+
+    let renames = rename_source_classes(&mut pool_mut, &meta.name);
 
     for ((s, idx), m) in &pool_mut.methods {
         let was = before.get(&(*s, *idx)).and_then(|v| v.as_deref());
@@ -126,8 +127,10 @@ pub fn translate(
         }
     }
 
+    let old_names: Vec<String> = renames.keys().cloned().collect();
+
     let raw_js = emit::render::render_class(
-        &meta.name, base_class, meta, &js_methods, walked, &pool_mut
+        &meta.name, base_class, meta, &js_methods, walked, &pool_mut, &old_names
     );
 
     let resolved = resolver::resolve::resolve(&raw_js, &pool_mut);
