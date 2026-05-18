@@ -70,6 +70,7 @@ impl<'a> LiftCtx<'a> {
             .types
             .get(&(self.dex_shard, idx))
             .map(|s| {
+                let s = s.trim_start_matches('[');
                 s.split('.')
                     .last()
                     .unwrap_or(s)
@@ -387,15 +388,10 @@ impl<'a> LiftCtx<'a> {
                 self.pending_new.insert(*d, *type_idx);
             }
 
-            Insn::NewArray(d, len_reg, type_idx) => {
+            Insn::NewArray(d, len_reg, _type_idx) => {
                 let len = self.reg(*len_reg);
-                let ty = self.type_ref(*type_idx);
                 self.set(*d, JsExpr::Raw(
-                    format!(
-                        "new Array({}) /* {}[] */",
-                        render::expr_to_js(&len),
-                        ty
-                    )
+                    format!("new Array({})", render::expr_to_js(&len))
                 ), off);
             }
 
