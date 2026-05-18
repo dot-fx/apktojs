@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use crate::extensions::tachiyomi_loader::{ApkMeta, WalkedSource};
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter;
 use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
-use crate::extensions::tachiyomi_loader::translator::emit::params::method_params;
 
 pub struct JsMethod {
     pub name: String,
@@ -10,43 +9,12 @@ pub struct JsMethod {
     pub defined_in: String,
 }
 
-pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, method_name: &str) -> String {
+pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str) -> String {
     let stmts = strip_dead_code(stmts);
     let mut declared: HashSet<u8> = HashSet::new();
-
-    let params_str = method_params(method_name);
-    let param_count = if params_str.is_empty() { 0 } else { params_str.split(',').count() };
-
-    let _ = param_count;
-
     let mut lines = Vec::new();
     render_stmts(&stmts, indent, &mut declared, &mut lines);
-
-    let param_names: Vec<&str> = if params_str.is_empty() {
-        vec![]
-    } else {
-        params_str.split(", ").map(str::trim).collect()
-    };
-
-    lines.iter().map(|line| {
-        if let Some(rest) = line.trim_start().strip_prefix("let v") {
-            if let Some(eq_pos) = rest.find(" = arguments[") {
-                let reg_str = &rest[..eq_pos];
-                if let Some(arg_pos) = rest.find("arguments[") {
-                    let after = &rest[arg_pos + "arguments[".len()..];
-                    if let Some(end) = after.find(']') {
-                        if let Ok(i) = after[..end].parse::<usize>() {
-                            if let Some(&pname) = param_names.get(i) {
-                                let pad = " ".repeat(line.len() - line.trim_start().len());
-                                return format!("{}let v{} = {};", pad, reg_str, pname);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        line.clone()
-    }).collect::<Vec<_>>().join("\n")
+    lines.join("\n")
 }
 
 fn is_valid_js_ident(s: &str) -> bool {
@@ -400,14 +368,44 @@ pub fn render_class(
 fn emit_methods(out: &mut String, methods: &[&JsMethod]) {
     out.push('\n');
     for method in methods {
-        let params = method_params(&method.name);
+        let mut max_arg: Option<usize> = None;
+        for line in method.body.lines() {
+            if let Some(pos) = line.find("arguments[") {
+                let after = &line[pos + "arguments[".len()..];
+                if let Some(end) = after.find(']') {
+                    if let Ok(i) = after[..end].parse::<usize>() {
+                        max_arg = Some(max_arg.map_or(i, |m: usize| m.max(i)));
+                    }
+                }
+            }
+        }
+
+        let params = match max_arg {
+            None => String::new(),
+            Some(max) => (0..=max)
+                .map(|i| format!("arg{}", i))
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
+
+        let body = match max_arg {
+            None => method.body.clone(),
+            Some(max) => {
+                let mut b = method.body.clone();
+                for i in 0..=max {
+                    b = b.replace(&format!("arguments[{}]", i), &format!("arg{}", i));
+                }
+                b
+            }
+        };
+
         out.push_str(&format!(
             "  {}({}) {{\n",
             render_method_name(&method.name),
             params
         ));
-        if !method.body.is_empty() {
-            out.push_str(&method.body);
+        if !body.is_empty() {
+            out.push_str(&body);
             out.push('\n');
         } else {
             out.push_str("    // empty method body\n");
