@@ -15,6 +15,7 @@ pub enum JsExpr {
     UnaryOp     { op: &'static str, expr: Box<JsExpr> },
     BitMask     { expr: Box<JsExpr>, mask: &'static str },
     Index       { arr: Box<JsExpr>, idx: Box<JsExpr> },
+    StaticFieldGet { class: String, field: String },
     ArrayLiteral(Vec<JsExpr>),
     StringConcat(Vec<JsExpr>),
     Raw(String),
@@ -22,6 +23,7 @@ pub enum JsExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsStmt {
+    Param { reg: u8, name: String },
     Assign   { reg: u8, expr: JsExpr },
     FieldSet { receiver: JsExpr, field: String, value: JsExpr },
     ArraySet { arr: JsExpr, idx: JsExpr, value: JsExpr },

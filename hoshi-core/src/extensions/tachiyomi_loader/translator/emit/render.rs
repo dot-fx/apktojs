@@ -147,6 +147,13 @@ fn render_stmts(
                 }
             }
 
+            JsStmt::Param { name, .. } => {
+                // Parameters are declared in the function signature, not as let statements.
+                // Emit nothing here — the signature is built from ctx.param_names separately.
+                // But if you need a fallback for any reason:
+                // lines.push(format!("{}// param: {}", pad, name));
+            }
+
             JsStmt::StaticGet { class, field, dst } => {
                 if declared.insert(*dst) {
                     lines.push(format!("{}let v{} = {}.{};", pad, dst, class, field));
@@ -470,6 +477,9 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
             } else {
                 f.to_string()
             }
+        }
+        JsExpr::StaticFieldGet { class, field } => {
+            format!("{}.{}", class, field)
         }
         JsExpr::Str(s) => format!("\"{}\"", escape_js_string(s)),
         JsExpr::Reg(r)      => format!("v{}", r),

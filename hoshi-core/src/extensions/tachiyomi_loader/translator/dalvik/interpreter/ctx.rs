@@ -181,8 +181,8 @@ impl<'a> LiftCtx<'a> {
 
             Insn::SGet(d, fi) | Insn::SGetObject(d, fi) | Insn::SGetBoolean(d, fi) => {
                 if let Some(f) = self.pool.fields.get(&(self.dex_shard, *fi)) {
-                    let expr = JsExpr::FieldGet {
-                        receiver: Box::new(JsExpr::Raw(f.class_name.clone())),
+                    let expr = JsExpr::StaticFieldGet {
+                        class: f.class_name.clone(),
                         field: f.field_name.clone(),
                     };
                     self.set(*d, expr, off);
@@ -204,20 +204,6 @@ impl<'a> LiftCtx<'a> {
                     });
                 } else {
                     self.warn(format!("sput: unknown field #{}", fi));
-                }
-            }
-
-            Insn::SGet(d, fi) | Insn::SGetObject(d, fi) | Insn::SGetBoolean(d, fi) => {
-                if let Some(f) = self.pool.fields.get(&(self.dex_shard, *fi)) {
-                    self.push(off, JsStmt::StaticGet {
-                        class: f.class_name.clone(),
-                        field: f.field_name.clone(),
-                        dst: *d,
-                    });
-                    self.regs.insert(*d, JsExpr::Reg(*d));
-                } else {
-                    self.warn(format!("sget: unknown field #{}", fi));
-                    self.set(*d, JsExpr::Raw(format!("/* unknown field #{} */", fi)), off);
                 }
             }
 
@@ -598,6 +584,7 @@ impl<'a> LiftCtx<'a> {
             Insn::ShlInt(d,a,b)  => self.binop(*d,*a,*b,"<<",off),
             Insn::ShrInt(d,a,b)  => self.binop(*d,*a,*b,">>",off),
             Insn::UshrInt(d,a,b) => self.binop(*d,*a,*b,">>>",off),
+            Insn::RemIntLit16(d, s, l) => self.binop_lit(*d, *s, *l as i64, "%", off),
 
             Insn::AddInt2Addr(d,s)|Insn::AddLong2Addr(d,s) => self.binop2addr(*d,*s,"+",off),
             Insn::SubInt2Addr(d,s)|Insn::SubLong2Addr(d,s) => self.binop2addr(*d,*s,"-",off),
