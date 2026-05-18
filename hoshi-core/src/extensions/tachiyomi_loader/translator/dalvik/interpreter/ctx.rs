@@ -242,6 +242,7 @@ impl<'a> LiftCtx<'a> {
 
             Insn::InvokeDirect { args, method_idx } => {
                 if let Some(&recv_reg) = args.first() {
+                    // Case 1: new Foo(...) — pending_new tracks the type
                     if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
                         let ctor_args: Vec<JsExpr> = args.iter().skip(1)
                             .map(|r| self.reg(*r)).collect();
@@ -253,7 +254,29 @@ impl<'a> LiftCtx<'a> {
                         self.set(recv_reg, expr, off);
                         return;
                     }
+
+                    // Case 2: super.<init>(...) — recv is `this`, emit super()
+                    if Some(recv_reg) == self.this_reg {
+                        let method_name = self.pool.methods
+                            .get(&(self.dex_shard, *method_idx))
+                            .map(|m| m.method_name.as_str())
+                            .unwrap_or("");
+
+                        if method_name == "<init>" {
+                            let ctor_args: Vec<JsExpr> = args.iter().skip(1)
+                                .map(|r| self.reg(*r)).collect();
+                            let call = JsExpr::MethodCall {
+                                receiver: Box::new(JsExpr::Raw("super".into())),
+                                method:   "constructor".into(),
+                                args:     ctor_args,
+                            };
+                            self.result       = Some(call.clone());
+                            self.pending_call = Some((off, call));
+                            return;
+                        }
+                    }
                 }
+
                 let call = self.make_virtual_call(args, *method_idx);
                 self.result       = Some(call.clone());
                 self.pending_call = Some((off, call));

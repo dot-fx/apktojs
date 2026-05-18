@@ -91,7 +91,7 @@ fn resolve_methods(js: &str, pool: &Pool) -> String {
             Some(m) => {
                 let name = m.js_name.as_deref().unwrap_or(&m.method_name);
                 if name == "<init>"   { return "constructor(".to_string(); }
-                if name == "<clinit>" { return "/* static init */(".to_string(); }
+                if name == "<clinit>" { return "__static_init__(".to_string(); }
                 format!("{}(", name)
             }
             None => format!("_meth{}_{}", shard, idx),

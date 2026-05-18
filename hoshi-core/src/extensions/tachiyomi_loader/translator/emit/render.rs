@@ -446,8 +446,13 @@ pub fn expr_to_js(expr: &JsExpr) -> String {
         JsExpr::MethodCall { receiver, method, args } => {
             let r = expr_to_js(receiver);
             let a = args.iter().map(expr_to_js).collect::<Vec<_>>().join(", ");
-            format!("{}({})", js_prop(&r, method), a)
+            if r == "super" && method == "constructor" {
+                format!("super({})", a)
+            } else {
+                format!("{}({})", js_prop(&r, method), a)
+            }
         }
+
         JsExpr::StaticCall { class, method, args } => {
             let a = args.iter().map(expr_to_js).collect::<Vec<_>>().join(", ");
             if method.is_empty() {
