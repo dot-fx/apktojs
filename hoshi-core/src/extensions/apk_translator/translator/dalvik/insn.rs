@@ -209,6 +209,11 @@ pub enum Insn {
     IPutByte(u8, u8, u32),
     IPutChar(u8, u8, u32),
     IPutShort(u8, u8, u32),
+    FilledNewArrayRange {
+        first: u16,
+        count: u8,
+        type_idx: u32,
+    },
 
     XorInt2Addr(u8, u8),
     ShlInt2Addr(u8, u8),

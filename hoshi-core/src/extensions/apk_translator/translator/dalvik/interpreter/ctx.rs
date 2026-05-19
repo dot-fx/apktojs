@@ -47,12 +47,7 @@ impl<'a> LiftCtx<'a> {
 
     pub fn flush_pending_call(&mut self, at_offset: i32) {
         if let Some((off, call)) = self.pending_call.take() {
-            let suppress = matches!(&call,
-                JsExpr::MethodCall { method, .. } if method == "getClass"
-            );
-            if !suppress {
-                self.push(off, JsStmt::Expr(call));
-            }
+            self.push(off, JsStmt::Expr(call));
             let _ = at_offset;
         }
     }
@@ -413,6 +408,15 @@ impl<'a> LiftCtx<'a> {
                 self.result = Some(JsExpr::ArrayLiteral(exprs));
             }
 
+            Insn::FilledNewArrayRange { first, count, .. } => {
+                let exprs: Vec<JsExpr> =
+                    (*first..*first + *count as u16)
+                        .map(|r| self.reg(r as u8))
+                        .collect();
+
+                self.result = Some(JsExpr::ArrayLiteral(exprs));
+            }
+
             Insn::AGet(d, arr, idx) | Insn::AGetObject(d, arr, idx) => {
                 let ae = self.reg(*arr);
                 let ie = self.reg(*idx);
@@ -453,25 +457,36 @@ impl<'a> LiftCtx<'a> {
             Insn::IfEqz(r, rel) => {
                 let e = self.reg(*r);
                 self.push(off, JsStmt::CondGoto {
-                    cond: JsExpr::UnaryOp { op: "!", expr: Box::new(e) },
+                    cond: JsExpr::BinOp {
+                        op: "===",
+                        left: Box::new(e),
+                        right: Box::new(JsExpr::Int(0)),
+                    },
                     target: off + *rel as i32,
                 });
             }
             Insn::IfNez(r, rel) => {
                 let e = self.reg(*r);
-                self.push(off, JsStmt::CondGoto { cond: e, target: off + *rel as i32 });
+                self.push(off, JsStmt::CondGoto {
+                    cond: JsExpr::BinOp {
+                        op: "!==",
+                        left: Box::new(e),
+                        right: Box::new(JsExpr::Int(0)),
+                    },
+                    target: off + *rel as i32,
+                });
             }
             Insn::IfEq(a, b, rel) => {
                 let ea = self.reg(*a); let eb = self.reg(*b);
                 self.push(off, JsStmt::CondGoto {
-                    cond: JsExpr::BinOp { op: "==", left: Box::new(ea), right: Box::new(eb) },
+                    cond: JsExpr::BinOp { op: "===", left: Box::new(ea), right: Box::new(eb) },
                     target: off + *rel as i32,
                 });
             }
             Insn::IfNe(a, b, rel) => {
                 let ea = self.reg(*a); let eb = self.reg(*b);
                 self.push(off, JsStmt::CondGoto {
-                    cond: JsExpr::BinOp { op: "!=", left: Box::new(ea), right: Box::new(eb) },
+                    cond: JsExpr::BinOp { op: "!==", left: Box::new(ea), right: Box::new(eb) },
                     target: off + *rel as i32,
                 });
             }

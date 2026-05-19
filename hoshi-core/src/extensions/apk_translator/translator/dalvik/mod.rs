@@ -151,6 +151,21 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
                 Insn::FilledNewArray { args, type_idx: type_word }
             }
 
+            // filled-new-array/range {vCCCC .. vNNNN}, type@BBBB
+            0x25 => {
+                let type_idx = next!() as u32;
+                let first = next!();
+                let count = hi;
+
+                pc += 1;
+
+                Insn::FilledNewArrayRange {
+                    first,
+                    count,
+                    type_idx,
+                }
+            }
+
             // fill-array-data vAA, +BBBBBBBB
             0x26 => {
                 let lo = next!() as i32;

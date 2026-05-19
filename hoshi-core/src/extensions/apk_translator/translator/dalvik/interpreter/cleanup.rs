@@ -44,7 +44,7 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
                 let iter_reg = extract_iter_reg(cond);
                 let expr = format!(
                     "firstInstance(v{}, (v{}) => v{} instanceof {})",
-                    iter_reg, iter_reg, iter_reg, class_name,
+                    iter_reg, iter_reg, iter_reg, class_name
                 );
                 out.push(JsStmt::Expr(JsExpr::Raw(expr)));
                 i += 1;
@@ -105,7 +105,12 @@ fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(u8, String)> {
             JsStmt::Assign { reg, expr: JsExpr::Raw(s) } if s.contains("instanceof") => {
                 if let Some(cls) = s.split("instanceof").nth(1) {
                     instanceof_reg = Some(*reg);
-                    class_name = Some(cls.trim().to_string());
+                    class_name = Some(
+                        cls.trim()
+                            .trim_end_matches(|c| c == ')' || c == ';')
+                            .trim()
+                            .to_string()
+                    );
                 }
             }
             JsStmt::If { then_body, else_body, .. }
@@ -143,7 +148,6 @@ fn simplify_foreach(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
 }
 
 fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> {
-    // s0: vA = vB.method()  — any no-arg method call that isn't .iterator() itself
     let (list_reg, list_expr) = match s0 {
         JsStmt::Assign {
             reg,
@@ -197,31 +201,40 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
         _ => return None,
     };
 
-    let body_str = callback_stmts
-        .iter()
-        .map(stmt_to_str)
-        .collect::<Option<Vec<_>>>()?
-        .join("; ");
+    let body_str = if callback_stmts.len() == 1 {
+        callback_stmts.iter()
+            .map(stmt_to_str)
+            .collect::<Option<Vec<_>>>()?
+            .join("; ")
+    } else {
+        let stmts_rendered = callback_stmts.iter()
+            .map(stmt_to_str)
+            .collect::<Option<Vec<_>>>()?;
+        format!("{{ {} }}", stmts_rendered.join("; "))
+    };
 
     Some(format!("{}.forEach(v{} => {})", list_expr, item_reg, body_str))
 }
 
 fn expr_to_str(expr: &JsExpr) -> String {
-    match expr {
-        JsExpr::Reg(r) => format!("v{}", r),
-        JsExpr::Raw(s) => s.clone(),
-        JsExpr::MethodCall { receiver, method, args } => {
-            let args_str = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
-            format!("{}.{}({})", expr_to_str(receiver), method, args_str)
-        }
-        _ => "?".into(),
-    }
+    crate::extensions::apk_translator::translator::emit::render::expr_to_js(expr, false)
 }
 
 fn stmt_to_str(stmt: &JsStmt) -> Option<String> {
     match stmt {
         JsStmt::Expr(e) => Some(expr_to_str(e)),
         JsStmt::Assign { reg, expr } => Some(format!("v{} = {}", reg, expr_to_str(expr))),
+        JsStmt::FieldSet { receiver, field, value } => Some(format!(
+            "{}.{} = {}",
+            expr_to_str(receiver), field, expr_to_str(value)
+        )),
+        JsStmt::ArraySet { arr, idx, value } => Some(format!(
+            "{}[{}] = {}",
+            expr_to_str(arr), expr_to_str(idx), expr_to_str(value)
+        )),
+        JsStmt::Return(Some(e)) => Some(format!("return {}", expr_to_str(e))),
+        JsStmt::Return(None) => Some("return".into()),
+        // Anything structurally complex (if/while/switch) can't inline into forEach — bail out
         _ => None,
     }
 }
@@ -298,7 +311,8 @@ pub fn elide_redundant_assigns(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
 
     while let Some(stmt) = iter.next() {
         let skip = if let JsStmt::Expr(ref e) = stmt {
-            matches!(iter.peek(), Some(JsStmt::Assign { expr: rhs, .. }) if rhs == e)
+            let is_pure = matches!(e, JsExpr::Reg(_) | JsExpr::Int(_) | JsExpr::Str(_));
+            is_pure && matches!(iter.peek(), Some(JsStmt::Assign { expr: rhs, .. }) if rhs == e)
         } else {
             false
         };

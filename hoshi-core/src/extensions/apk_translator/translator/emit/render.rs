@@ -10,12 +10,50 @@ pub struct JsMethod {
     pub defined_in: String,
 }
 
-pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool,) -> String {
+pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool) -> String {
     let stmts = strip_dead_code(stmts);
-    let mut declared: HashSet<u8> = HashSet::new();
+
+    let mut all_regs: Vec<u8> = {
+        let mut set = HashSet::new();
+        collect_assigned_regs(&stmts, &mut set);
+        let mut v: Vec<u8> = set.into_iter().collect();
+        v.sort();
+        v
+    };
+
     let mut lines = Vec::new();
+
+    if !all_regs.is_empty() {
+        let pad = " ".repeat(indent);
+        let decls = all_regs.iter().map(|r| format!("v{}", r)).collect::<Vec<_>>().join(", ");
+        lines.push(format!("{}let {};", pad, decls));
+    }
+
+    let mut declared: HashSet<u8> = all_regs.into_iter().collect(); // all pre-declared
     render_stmts(&stmts, indent, &mut declared, &mut lines, has_super);
+
     lines.join("\n")
+}
+
+fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
+    for stmt in stmts {
+        match stmt {
+            JsStmt::Assign { reg, .. } => { out.insert(*reg); }
+            JsStmt::StaticGet { dst, .. } => { out.insert(*dst); }
+            JsStmt::If { then_body, else_body, .. } => {
+                collect_assigned_regs(then_body, out);
+                collect_assigned_regs(else_body, out);
+            }
+            JsStmt::Loop { body } | JsStmt::While { body, .. } => {
+                collect_assigned_regs(body, out);
+            }
+            JsStmt::Switch { cases, default, .. } => {
+                for (_, body) in cases { collect_assigned_regs(body, out); }
+                if let Some(d) = default { collect_assigned_regs(d, out); }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn is_valid_js_ident(s: &str) -> bool {
@@ -455,9 +493,7 @@ fn emit_methods(
                 b
             }
         };
-
-        let body = fix_self_refs(&body, owner_class, main_class, old_names, is_self);
-
+        
         out.push_str(&format!(
             "  {}({}) {{\n",
             render_method_name(&method.name),
