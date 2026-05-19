@@ -15,6 +15,8 @@ pub struct LiftCtx<'a> {
     pub this_reg:     Option<u8>,
     pub dex_shard:    usize,
 
+    pub current_class: String,
+
     pub pool: &'a Pool,
 }
 
@@ -118,6 +120,11 @@ impl<'a> LiftCtx<'a> {
             // Moves
             Insn::Move(d, s) | Insn::MoveWide(d, s) | Insn::MoveObject(d, s) => {
                 let e = self.reg(*s);
+                if Some(*s) == self.this_reg {
+                    self.this_reg = Some(*d);
+                    self.regs.insert(*d, JsExpr::This);
+                    return;
+                }
                 self.set(*d, e, off);
             }
 
@@ -223,43 +230,58 @@ impl<'a> LiftCtx<'a> {
 
             Insn::InvokeDirect { args, method_idx } => {
                 if let Some(&recv_reg) = args.first() {
-                    // Case 1: new Foo(...) — pending_new tracks the type
+
+                    // new Foo(...)
                     if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
-                        let ctor_args: Vec<JsExpr> = args.iter().skip(1)
-                            .map(|r| self.reg(*r)).collect();
+                        let ctor_args: Vec<JsExpr> = args.iter()
+                            .skip(1)
+                            .map(|r| self.reg(*r))
+                            .collect();
+
                         let expr = JsExpr::New {
                             class: self.type_ref(type_idx),
                             args: ctor_args,
                         };
+
                         self.result = Some(expr.clone());
                         self.set(recv_reg, expr, off);
                         return;
                     }
 
-                    // Case 2: super.<init>(...) — recv is `this`, emit super()
-                    if Some(recv_reg) == self.this_reg {
-                        let method_name = self.pool.methods
-                            .get(&(self.dex_shard, *method_idx))
-                            .map(|m| m.method_name.as_str())
-                            .unwrap_or("");
+                    // ctor invoke on this
+                    let recv_expr = self.reg(recv_reg);
 
-                        if method_name == "<init>" {
-                            let ctor_args: Vec<JsExpr> = args.iter().skip(1)
-                                .map(|r| self.reg(*r)).collect();
-                            let call = JsExpr::MethodCall {
-                                receiver: Box::new(JsExpr::Raw("super".into())),
-                                method:   "constructor".into(),
-                                args:     ctor_args,
-                            };
-                            self.result       = Some(call.clone());
-                            self.pending_call = Some((off, call));
-                            return;
+                    if matches!(recv_expr, JsExpr::This) || recv_reg == self.this_reg.unwrap_or(255) {
+                        if let Some(m) =
+                            self.pool.methods.get(&(self.dex_shard, *method_idx))
+                        {
+
+                            if m.method_name == "<init>" {
+
+                                let ctor_args: Vec<JsExpr> = args.iter()
+                                    .skip(1)
+                                    .map(|r| self.reg(*r))
+                                    .collect();
+
+                                let call = if m.class_name.split('.').last().unwrap_or(&m.class_name)
+                                    == self.current_class.split('.').last().unwrap_or(&self.current_class)
+                                {
+                                    JsExpr::ThisCtorCall { args: ctor_args }
+                                } else {
+                                    JsExpr::SuperCall { args: ctor_args }
+                                };
+
+                                self.result = Some(call.clone());
+                                self.pending_call = Some((off, call));
+                                return;
+                            }
                         }
                     }
                 }
 
                 let call = self.make_virtual_call(args, *method_idx);
-                self.result       = Some(call.clone());
+
+                self.result = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
@@ -351,6 +373,8 @@ impl<'a> LiftCtx<'a> {
                 let regs: Vec<u8> = (*first..*first + *count).collect();
 
                 if let Some(&recv_reg) = regs.first() {
+
+                    // new Foo(...)
                     if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
                         let ctor_args: Vec<JsExpr> = regs.iter()
                             .skip(1)
@@ -365,6 +389,35 @@ impl<'a> LiftCtx<'a> {
                         self.result = Some(expr.clone());
                         self.set(recv_reg, expr, off);
                         return;
+                    }
+
+                    // this(...) / super(...)
+                    let recv_expr = self.reg(recv_reg);
+
+                    if matches!(recv_expr, JsExpr::This) || recv_reg == self.this_reg.unwrap_or(255) {
+                        if let Some(m) =
+                            self.pool.methods.get(&(self.dex_shard, *method_idx))
+                        {
+                            if m.method_name == "<init>" {
+
+                                let ctor_args: Vec<JsExpr> = regs.iter()
+                                    .skip(1)
+                                    .map(|r| self.reg(*r))
+                                    .collect();
+
+                                let call = if m.class_name.split('.').last().unwrap_or(&m.class_name)
+                                    == self.current_class.split('.').last().unwrap_or(&self.current_class)
+                                {
+                                    JsExpr::ThisCtorCall { args: ctor_args }
+                                } else {
+                                    JsExpr::SuperCall { args: ctor_args }
+                                };
+
+                                self.result = Some(call.clone());
+                                self.pending_call = Some((off, call));
+                                return;
+                            }
+                        }
                     }
                 }
 

@@ -9,6 +9,7 @@ pub fn lift(
     insns:          &[Insn],
     insns_raw:      &[DecodedInsn],
     method_name:    &str,
+    current_class:  &str,
     registers_size: u16,
     params_size:    u16,
     is_static:      bool,
@@ -23,13 +24,14 @@ pub fn lift(
     let first_param = (registers_size - params_size) as u8;
 
     let mut ctx = LiftCtx {
-        regs:        HashMap::new(),
-        tagged:      Vec::new(),
-        warnings:    Vec::new(),
-        result:      None,
+        regs:         HashMap::new(),
+        tagged:       Vec::new(),
+        warnings:     Vec::new(),
+        result:       None,
         pending_call: None,
         pending_new:  HashMap::new(),
-        method_name: method_name.to_string(),
+        method_name:  method_name.to_string(),
+        current_class: current_class.to_string(),
         this_reg,
         dex_shard,
         pool,

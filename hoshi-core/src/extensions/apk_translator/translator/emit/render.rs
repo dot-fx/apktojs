@@ -10,8 +10,35 @@ pub struct JsMethod {
     pub defined_in: String,
 }
 
+fn hoist_super(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
+    let super_pos = stmts.iter().position(|s| {
+        matches!(s, JsStmt::Expr(JsExpr::SuperCall { .. }))
+    });
+
+    let Some(super_pos) = super_pos else {
+        return stmts;
+    };
+
+    let mut before: Vec<JsStmt> = vec![];
+    let mut deferred: Vec<JsStmt> = vec![];
+
+    for stmt in stmts[..super_pos].iter().cloned() {
+        match &stmt {
+            JsStmt::FieldSet { receiver: JsExpr::This, .. } => deferred.push(stmt),
+            _ => before.push(stmt),
+        }
+    }
+
+    let mut result = before;
+    result.push(stmts[super_pos].clone());  // super(...)
+    result.extend(deferred);                // this.x = ... now safe
+    result.extend(stmts[super_pos + 1..].iter().cloned());
+    result
+}
+
 pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool) -> String {
     let stmts = strip_dead_code(stmts);
+    let stmts = hoist_super(stmts);
 
     let mut all_regs: Vec<u8> = {
         let mut set = HashSet::new();
@@ -178,18 +205,15 @@ fn render_stmts(
     for stmt in stmts {
         match stmt {
             JsStmt::Assign { reg, expr } => {
-                if declared.insert(*reg) {
-                    lines.push(format!("{}let v{} = {};", pad, reg, expr_to_js(expr, has_super)));
-                } else {
-                    lines.push(format!("{}v{} = {};", pad, reg, expr_to_js(expr, has_super)));
-                }
+                lines.push(format!(
+                    "{}v{} = {};",
+                    pad,
+                    reg,
+                    expr_to_js(expr, has_super)
+                ));
             }
 
             JsStmt::Param { name, .. } => {
-                // Parameters are declared in the function signature, not as let statements.
-                // Emit nothing here — the signature is built from ctx.param_names separately.
-                // But if you need a fallback for any reason:
-                // lines.push(format!("{}// param: {}", pad, name));
             }
 
             JsStmt::StaticGet { class, field, dst } => {
@@ -406,18 +430,14 @@ pub fn render_class(
         if is_main(owner) { continue; }
 
         let simple = owner.split('.').last().unwrap_or(owner);
-        let extends_clause = pool.type_info.get(owner)
+        let super_name = pool.type_info.get(owner)
             .and_then(|t| t.superclass.as_deref())
-            .filter(|s| {
-                !s.contains("Object")
-                    && !s.contains("Lambda")
-            })
-            .map(|s| {
-                format!(
-                    " extends {}",
-                    s.split('.').last().unwrap_or(s)
-                )
-            })
+            .filter(|&s| s != "Object" && s != "java.lang.Object" && !s.ends_with(".Object"));
+
+
+        let has_super = super_name.is_some();
+        let extends_clause = super_name
+            .map(|s| format!(" extends {}", s.split('.').last().unwrap_or(s)))
             .unwrap_or_default();
 
         out.push_str(&format!(
@@ -425,14 +445,6 @@ pub fn render_class(
             simple,
             extends_clause
         ));
-        let has_super = pool.type_info.get(owner)
-            .and_then(|t| t.superclass.as_deref())
-            .map(|s|
-                s != "Object"
-                    && s != "java.lang.Object"
-                    && !s.ends_with(".Object")
-            )
-            .unwrap_or(false);
 
         emit_methods(&mut out, group_methods, has_super, owner, class_name, &old_names, false);
 
@@ -444,7 +456,22 @@ pub fn render_class(
         .flat_map(|(_, ms)| ms.iter().copied())
         .collect();
 
-    out.push_str(&format!("class {} extends {} {{\n", class_name, base_class));
+    let actually_uses_super = main_methods.iter().any(|m| {
+        m.body.contains("super(")
+    });
+
+    let extends_clause =
+        if has_super {
+            format!(" extends {}", base_class)
+        } else {
+            String::new()
+        };
+
+    out.push_str(&format!(
+        "class {}{} {{\n",
+        class_name,
+        extends_clause
+    ));
     emit_methods(&mut out, &main_methods, has_super, class_name, class_name, &old_names, true);
 
     out.push_str("}\n");
@@ -483,17 +510,30 @@ fn emit_methods(
                 .join(", "),
         };
 
-        let body = match max_arg {
+        let mut body = match max_arg {
             None => method.body.clone(),
             Some(max) => {
                 let mut b = method.body.clone();
+
                 for i in 0..=max {
-                    b = b.replace(&format!("arguments[{}]", i), &format!("arg{}", i));
+                    b = b.replace(
+                        &format!("arguments[{}]", i),
+                        &format!("arg{}", i),
+                    );
                 }
+
                 b
             }
         };
-        
+
+        body = fix_self_refs(
+            &body,
+            owner_class,
+            main_class,
+            old_names,
+            is_self,
+        );
+
         out.push_str(&format!(
             "  {}({}) {{\n",
             render_method_name(&method.name),
@@ -546,15 +586,29 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            if r == "super" && method == "constructor" {
-                if has_super {
-                    format!("super({})", a)
-                } else {
-                    String::new()
-                }
+            format!("{}({})", js_prop(&r, method), a)
+        }
+
+        JsExpr::SuperCall { args } => {
+            let a = args.iter()
+                .map(|e| expr_to_js(e, has_super))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            if has_super {
+                format!("super({})", a)
             } else {
-                format!("{}({})", js_prop(&r, method), a)
+                format!("/* super({}) -- no extends? */", a)
             }
+        }
+
+        JsExpr::ThisCtorCall { args } => {
+            let a = args.iter()
+                .map(|e| expr_to_js(e, has_super))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!("this.constructor({})", a)
         }
 
         JsExpr::StaticCall { class, method, args } => {
@@ -607,15 +661,37 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
     }
 }
 
-fn fix_self_refs(body: &str, owner_class: &str, main_class: &str, old_names: &[String], is_self: bool) -> String {
+fn fix_self_refs(
+    body: &str,
+    owner_class: &str,
+    main_class: &str,
+    old_names: &[String],
+    is_self: bool
+) -> String {
     let mut out = body.to_string();
 
     for old in old_names {
-        out = out.replace(&format!("{}.", old), &format!("{}.", main_class));
+        let from = format!("{}.", old);
+        let to = format!("{}.", main_class);
+
+        if out.contains(&from) {
+            eprintln!("replace: {:?} -> {:?}", from, to);
+        }
+
+        out = out.replace(&from, &to);
     }
 
     if is_self {
-        out = out.replace(&format!("{}.", owner_class), "this.");
+        let from = format!("new {}(", owner_class);
+
+        if out.contains(&from) {
+            eprintln!("self ctor replace hit: {:?}", from);
+        }
+
+        out = out.replace(
+            &from,
+            "new this.constructor("
+        );
     }
 
     out

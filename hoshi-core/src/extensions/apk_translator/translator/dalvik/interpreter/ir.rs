@@ -7,15 +7,63 @@ pub enum JsExpr {
     Str(String),
     Reg(u8),
     This,
-    MethodCall { receiver: Box<JsExpr>, method: String, args: Vec<JsExpr> },
-    StaticCall  { class: String, method: String, args: Vec<JsExpr> },
-    New         { class: String, args: Vec<JsExpr> },
-    FieldGet    { receiver: Box<JsExpr>, field: String },
-    BinOp       { op: &'static str, left: Box<JsExpr>, right: Box<JsExpr> },
-    UnaryOp     { op: &'static str, expr: Box<JsExpr> },
-    BitMask     { expr: Box<JsExpr>, mask: &'static str },
-    Index       { arr: Box<JsExpr>, idx: Box<JsExpr> },
-    StaticFieldGet { class: String, field: String },
+
+    MethodCall {
+        receiver: Box<JsExpr>,
+        method: String,
+        args: Vec<JsExpr>,
+    },
+
+    StaticCall {
+        class: String,
+        method: String,
+        args: Vec<JsExpr>,
+    },
+
+    New {
+        class: String,
+        args: Vec<JsExpr>,
+    },
+
+    SuperCall {
+        args: Vec<JsExpr>,
+    },
+
+    ThisCtorCall {
+        args: Vec<JsExpr>,
+    },
+
+    FieldGet {
+        receiver: Box<JsExpr>,
+        field: String,
+    },
+
+    BinOp {
+        op: &'static str,
+        left: Box<JsExpr>,
+        right: Box<JsExpr>,
+    },
+
+    UnaryOp {
+        op: &'static str,
+        expr: Box<JsExpr>,
+    },
+
+    BitMask {
+        expr: Box<JsExpr>,
+        mask: &'static str,
+    },
+
+    Index {
+        arr: Box<JsExpr>,
+        idx: Box<JsExpr>,
+    },
+
+    StaticFieldGet {
+        class: String,
+        field: String,
+    },
+
     ArrayLiteral(Vec<JsExpr>),
     StringConcat(Vec<JsExpr>),
     Raw(String),

@@ -44,9 +44,15 @@ pub fn translate(
         let insn_only: Vec<_> = decoded.iter().map(|d| d.insn.clone()).collect();
 
         let (stmts, mut w) = lift(
-            &insn_only, &decoded,
-            &method.name, method.registers_size, method.ins_size,
-            method.is_static, walked.dex_shard, pool,
+            &insn_only,
+            &decoded,
+            &method.name,
+            &method.defined_in,
+            method.registers_size,
+            method.ins_size,
+            method.is_static,
+            walked.dex_shard,
+            pool,
         );
 
         warnings.append(&mut w);
