@@ -221,11 +221,11 @@ fn render_stmts(
             }
 
             JsStmt::StaticGet { class, field, dst } => {
-                lines.push(format!("{}v{} = {}.{};", pad, dst, class, field));
+                lines.push(format!("{}v{} = {}.{};", pad, dst, names.resolve(class), field));
             }
 
             JsStmt::StaticSet { class, field, value } => {
-                lines.push(format!("{}{}.{} = {};", pad, class, field, expr_to_js(value, has_super, names)));
+                lines.push(format!("{}{}.{} = {};", pad, names.resolve(class), field, expr_to_js(value, has_super, names)));
             }
 
             JsStmt::FieldSet { receiver, field, value } => {
@@ -497,8 +497,16 @@ fn emit_methods(
     owner_class: &str,
     is_self: bool
 ) {
+    let mut seen_names = HashSet::new();
+    let deduped: Vec<&&JsMethod> = methods.iter().rev()
+        .filter(|m| seen_names.insert(m.name.clone()))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
     out.push('\n');
-    for method in methods {
+    for method in deduped {
         let mut max_arg: Option<usize> = None;
         for line in method.body.lines() {
             if let Some(pos) = line.find("arguments[") {
