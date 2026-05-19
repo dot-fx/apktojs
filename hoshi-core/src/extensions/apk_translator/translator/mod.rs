@@ -3,10 +3,10 @@ pub mod emit;
 pub mod resolver;
 
 use crate::error::CoreError;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{lift, JsStmt};
-use crate::extensions::tachiyomi_loader::translator::resolver::infer::{rename_source_classes, InferCtx, SymKey};
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
-use crate::extensions::tachiyomi_loader::{ApkMeta, EntryKind, WalkedSource};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{lift, JsStmt};
+use crate::extensions::apk_translator::translator::resolver::infer::{rename_source_classes, InferCtx, SymKey};
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::{ApkMeta, EntryKind, WalkedSource};
 
 pub struct TranslatedSource {
     pub js: String,

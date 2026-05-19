@@ -4,7 +4,7 @@ use dex::{Dex, DexReader};
 use zip::ZipArchive;
 
 use crate::error::CoreError;
-use crate::extensions::tachiyomi_loader::ApkMeta;
+use crate::extensions::apk_translator::ApkMeta;
 
 pub type ParsedDex = Dex<Vec<u8>>;
 

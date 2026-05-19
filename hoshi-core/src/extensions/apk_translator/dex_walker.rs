@@ -1,9 +1,9 @@
 use dex::Dex;
 
 use crate::error::CoreError;
-use crate::extensions::tachiyomi_loader::{ApkMeta, ExtractedDex};
-use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn;
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::{ApkMeta, ExtractedDex};
+use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
 const HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/HttpSource;";
@@ -115,7 +115,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
         let mut referenced_descs: Vec<String> = Vec::new();
 
         for method in &all_methods_to_scan {
-            let decoded = crate::extensions::tachiyomi_loader::translator::dalvik::decode(&method.insns);
+            let decoded = crate::extensions::apk_translator::translator::dalvik::decode(&method.insns);
             for d in &decoded {
                 match &d.insn {
                     Insn::SGet(_, field_idx)
@@ -206,7 +206,7 @@ fn find_factory_sources(
     shard: &Dex<Vec<u8>>,
     all_shards: &[Dex<Vec<u8>>],
 ) -> Vec<String> {
-    use crate::extensions::tachiyomi_loader::translator::dalvik::{self};
+    use crate::extensions::apk_translator::translator::dalvik::{self};
 
     let create_method = factory
         .virtual_methods()

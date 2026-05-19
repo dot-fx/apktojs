@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use crate::extensions::tachiyomi_loader::translator::dalvik::insn::Insn;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
-use crate::extensions::tachiyomi_loader::translator::emit::render;
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
+use crate::extensions::apk_translator::translator::emit::render;
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 pub struct LiftCtx<'a> {
     pub regs:         HashMap<u8, JsExpr>,

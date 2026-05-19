@@ -1,4 +1,4 @@
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = elide_redundant_assigns(stmts);

@@ -1,8 +1,8 @@
 use regex::Regex;
-use crate::extensions::tachiyomi_loader::translator::resolver::cleanup::{collapse_companion_chains, remove_duplicate_stmts, remove_serializers_module_stmts};
-use crate::extensions::tachiyomi_loader::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
-use crate::extensions::tachiyomi_loader::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::translator::resolver::cleanup::{collapse_companion_chains, remove_duplicate_stmts, remove_serializers_module_stmts};
+use crate::extensions::apk_translator::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
+use crate::extensions::apk_translator::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 pub fn resolve(raw_js: &str, pool: &Pool) -> String {
     let mut js = raw_js.to_string();

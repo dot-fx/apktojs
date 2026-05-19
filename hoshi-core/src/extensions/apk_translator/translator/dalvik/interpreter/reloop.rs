@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{cfg, BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
+use crate::extensions::apk_translator::translator::dalvik::interpreter;
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{cfg, BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
 
 const MAX_DEPTH: usize = 64;
 

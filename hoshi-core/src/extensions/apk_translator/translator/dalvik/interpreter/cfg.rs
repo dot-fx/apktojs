@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
 
 pub fn block_successors(b: &BasicBlock) -> Vec<i32> {
     match &b.term {

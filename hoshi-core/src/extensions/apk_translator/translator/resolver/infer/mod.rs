@@ -4,10 +4,10 @@ mod helpers;
 use std::collections::HashMap;
 use candidates::CANDIDATES;
 use helpers::{is_resolved_method, obfuscated_call_key};
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
-use crate::extensions::tachiyomi_loader::translator::resolver::infer::candidates::score_candidate;
-use crate::extensions::tachiyomi_loader::translator::resolver::infer::helpers::parse_meth_token;
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::resolver::infer::candidates::score_candidate;
+use crate::extensions::apk_translator::translator::resolver::infer::helpers::parse_meth_token;
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 const HTTP_SOURCE_IDENTITY_METHODS: &[&str] = &[
     "popularMangaRequest", "popularMangaParse",

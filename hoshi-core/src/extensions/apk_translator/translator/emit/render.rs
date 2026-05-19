@@ -1,8 +1,8 @@
 use std::collections::HashSet;
-use crate::extensions::tachiyomi_loader::{ApkMeta, WalkedSource};
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter;
-use crate::extensions::tachiyomi_loader::translator::dalvik::interpreter::{JsExpr, JsStmt};
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::{ApkMeta, WalkedSource};
+use crate::extensions::apk_translator::translator::dalvik::interpreter;
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 pub struct JsMethod {
     pub name: String,

@@ -1,4 +1,4 @@
-use crate::extensions::tachiyomi_loader::translator::resolver::pool::{FieldInfo, MethodInfo, Pool};
+use crate::extensions::apk_translator::translator::resolver::pool::{FieldInfo, MethodInfo, Pool};
 
 pub fn lookup_string(pool: &Pool, idx: u32) -> Option<&String> {
     (0..16).find_map(|s| pool.strings.get(&(s, idx)))
