@@ -453,6 +453,12 @@ pub fn render_class(
         emit_methods(&mut out, group_methods, &*owner, false);
 
         out.push_str("}\n\n");
+        if group_methods.iter().any(|m| m.name == "<clinit>") {
+            out.push_str(&format!(
+                "if (typeof {}.__static_init__ === 'function') {}.__static_init__();\n\n",
+                simple, simple
+            ));
+        }
     }
 
     let main_methods: Vec<&JsMethod> = groups.iter()
