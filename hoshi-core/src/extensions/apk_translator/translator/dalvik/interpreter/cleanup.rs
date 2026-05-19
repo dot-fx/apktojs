@@ -5,6 +5,14 @@ pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = simplify_array_add(stmts);
     let stmts = simplify_first_instance(stmts);
     let stmts = simplify_foreach(stmts);
+    let stmts = elide_trailing_return(stmts);
+    stmts
+}
+
+fn elide_trailing_return(mut stmts: Vec<JsStmt>) -> Vec<JsStmt> {
+    if matches!(stmts.last(), Some(JsStmt::Return(None))) {
+        stmts.pop();
+    }
     stmts
 }
 
