@@ -86,6 +86,8 @@ pub fn translate(
         }
     }
 
+    let names = resolver::resolve::TypeNames::build(&pool_mut);
+
     for (stmts, method_name, defined_in) in &lifted {
         let has_super = pool.type_info.get(defined_in)
             .and_then(|t| t.superclass.as_deref())
@@ -101,6 +103,7 @@ pub fn translate(
             4,
             method_name,
             has_super,
+            &names
         );
 
         js_methods.push(emit::render::JsMethod {
@@ -109,17 +112,6 @@ pub fn translate(
             defined_in: defined_in.clone(),
         });
     }
-
-    let base_class = match walked.kind {
-        EntryKind::Factory => "HttpSource",
-        EntryKind::Direct  => {
-            if walked.hierarchy.iter().any(|h| h.contains("ParsedHttpSource")) {
-                "ParsedHttpSource"
-            } else {
-                "HttpSource"
-            }
-        }
-    };
 
     for ((s, idx), m) in &pool_mut.methods {
         if *s != walked.dex_shard { continue; }
@@ -133,7 +125,16 @@ pub fn translate(
         }
     }
 
-    let names = resolver::resolve::TypeNames::build(&pool_mut);
+    let base_class = match walked.kind {
+        EntryKind::Factory => "HttpSource",
+        EntryKind::Direct  => {
+            if walked.hierarchy.iter().any(|h| h.contains("ParsedHttpSource")) {
+                "ParsedHttpSource"
+            } else {
+                "HttpSource"
+            }
+        }
+    };
 
     let raw_js = emit::render::render_class(
         &meta.name,

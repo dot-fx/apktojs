@@ -66,13 +66,7 @@ impl<'a> LiftCtx<'a> {
         self.pool
             .types
             .get(&(self.dex_shard, idx))
-            .map(|s| {
-                let s = s.trim_start_matches('[');
-                s.split('.')
-                    .last()
-                    .unwrap_or(s)
-                    .replace('$', "_")
-            })
+            .map(|s| s.trim_start_matches('[').to_string())
             .unwrap_or_else(|| format!("Type{}", idx))
     }
 
@@ -263,8 +257,7 @@ impl<'a> LiftCtx<'a> {
                                     .map(|r| self.reg(*r))
                                     .collect();
 
-                                let call = if m.class_name.split('.').last().unwrap_or(&m.class_name)
-                                    == self.current_class.split('.').last().unwrap_or(&self.current_class)
+                                let call = if m.class_name == self.current_class
                                 {
                                     JsExpr::ThisCtorCall { args: ctor_args }
                                 } else {
@@ -291,13 +284,7 @@ impl<'a> LiftCtx<'a> {
                 let info = self.pool.methods.get(&(self.dex_shard, *method_idx));
 
                 let class = info
-                    .map(|m| {
-                        m.class_name
-                            .split('.')
-                            .last()
-                            .unwrap_or(&m.class_name)
-                            .to_string()
-                    })
+                    .map(|m| m.class_name.clone())
                     .unwrap_or_else(|| "UnknownClass".into());
 
                 let method = self.method_ref(*method_idx);
@@ -405,8 +392,7 @@ impl<'a> LiftCtx<'a> {
                                     .map(|r| self.reg(*r))
                                     .collect();
 
-                                let call = if m.class_name.split('.').last().unwrap_or(&m.class_name)
-                                    == self.current_class.split('.').last().unwrap_or(&self.current_class)
+                                let call = if m.class_name == self.current_class
                                 {
                                     JsExpr::ThisCtorCall { args: ctor_args }
                                 } else {
@@ -448,7 +434,7 @@ impl<'a> LiftCtx<'a> {
             Insn::NewArray(d, len_reg, _type_idx) => {
                 let len = self.reg(*len_reg);
                 self.set(*d, JsExpr::Raw(
-                    format!("new Array({})", render::expr_to_js(&len, true))
+                    format!("new Array({})", simple_render(&len))
                 ), off);
             }
 
@@ -496,7 +482,7 @@ impl<'a> LiftCtx<'a> {
                 self.set(*d, JsExpr::Raw(
                     format!(
                         "({} instanceof {})",
-                        render::expr_to_js(&oe, true),
+                        simple_render(&oe),
                         ty
                     )
                 ), off);
@@ -634,7 +620,7 @@ impl<'a> LiftCtx<'a> {
             }
             Insn::IntToChar(d, s) => {
                 let e = self.reg(*s);
-                self.set(*d, JsExpr::Raw(format!("String.fromCharCode({})", render::expr_to_js(&e, true))), off);
+                self.set(*d, JsExpr::Raw(format!("String.fromCharCode({})", simple_render(&e))), off);
             }
 
             Insn::AddInt(d,a,b)|Insn::AddLong(d,a,b)|Insn::AddFloat(d,a,b)|Insn::AddDouble(d,a,b)
@@ -690,19 +676,19 @@ impl<'a> LiftCtx<'a> {
             |Insn::CmplDouble(d,a,b)|Insn::CmpgDouble(d,a,b) => {
                 let ae = self.reg(*a); let be = self.reg(*b);
                 self.set(*d, JsExpr::Raw(
-                    format!("Math.sign({} - {})", render::expr_to_js(&ae, true), render::expr_to_js(&be, true))
+                    format!("Math.sign({} - {})", simple_render(&ae), simple_render(&be))
                 ), off);
             }
 
             Insn::Throw(r) => {
                 let e = self.reg(*r);
-                self.push(off, JsStmt::Expr(JsExpr::Raw(format!("throw {}", render::expr_to_js(&e, true)))));
+                self.push(off, JsStmt::Expr(JsExpr::Raw(format!("throw {}", simple_render(&e)))));
             }
 
             Insn::FillArrayData(arr, _) => {
                 let ae = self.reg(*arr);
                 self.push(off, JsStmt::Comment(
-                    format!("// fill_array_data({}) /* TODO */", render::expr_to_js(&ae, true))
+                    format!("// fill_array_data({}) /* TODO */", simple_render(&ae))
                 ));
             }
 
@@ -774,5 +760,14 @@ impl<'a> LiftCtx<'a> {
             cond:   JsExpr::BinOp { op, left: Box::new(e), right: Box::new(JsExpr::Int(0)) },
             target: off + rel,
         });
+    }
+}
+
+fn simple_render(e: &JsExpr) -> String {
+    match e {
+        JsExpr::Reg(r) => format!("v{}", r),
+        JsExpr::Int(n) => n.to_string(),
+        JsExpr::This   => "this".into(),
+        other          => format!("{:?}", other), // fallback, shouldn't happen
     }
 }

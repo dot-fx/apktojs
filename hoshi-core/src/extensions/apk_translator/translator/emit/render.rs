@@ -37,7 +37,7 @@ fn hoist_super(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     result
 }
 
-pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool) -> String {
+pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool, names: &TypeNames) -> String {
     let stmts = strip_dead_code(stmts);
     let stmts = hoist_super(stmts);
 
@@ -58,7 +58,7 @@ pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_supe
     }
 
     let mut declared: HashSet<u8> = all_regs.into_iter().collect(); // all pre-declared
-    render_stmts(&stmts, indent, &mut declared, &mut lines, has_super);
+    render_stmts(&stmts, indent, &mut declared, &mut lines, has_super, names);
 
     lines.join("\n")
 }
@@ -180,18 +180,18 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
     out
 }
 
-fn simplify_cond(expr: &JsExpr, has_super: bool) -> String {
+fn simplify_cond(expr: &JsExpr, has_super: bool, names: &TypeNames) -> String {
     if let JsExpr::UnaryOp { op: "!", expr: inner } = expr {
         if let JsExpr::UnaryOp { op: "!", expr: innermost } = inner.as_ref() {
-            return expr_to_js(innermost, has_super);
+            return expr_to_js(innermost, has_super, names);
         }
     }
 
     if let JsExpr::BinOp { op, left, right } = expr {
-        return format!("{} {} {}", expr_to_js(left, has_super), op, expr_to_js(right, has_super));
+        return format!("{} {} {}", expr_to_js(left, has_super, names), op, expr_to_js(right, has_super, names));
     }
 
-    expr_to_js(expr, has_super)
+    expr_to_js(expr, has_super, names)
 }
 
 fn render_stmts(
@@ -200,6 +200,7 @@ fn render_stmts(
     declared: &mut HashSet<u8>,
     lines:    &mut Vec<String>,
     has_super: bool,
+    names: &TypeNames
 ) {
     let pad = " ".repeat(indent);
 
@@ -210,7 +211,7 @@ fn render_stmts(
                     "{}v{} = {};",
                     pad,
                     reg,
-                    expr_to_js(expr, has_super)
+                    expr_to_js(expr, has_super, names)
                 ));
             }
 
@@ -222,21 +223,21 @@ fn render_stmts(
             }
 
             JsStmt::StaticSet { class, field, value } => {
-                lines.push(format!("{}{}.{} = {};", pad, class, field, expr_to_js(value, has_super)));
+                lines.push(format!("{}{}.{} = {};", pad, class, field, expr_to_js(value, has_super, names)));
             }
 
             JsStmt::FieldSet { receiver, field, value } => {
                 lines.push(format!("{}{}.{} = {};",
-                                   pad, expr_to_js(receiver, has_super), field, expr_to_js(value, has_super)));
+                                   pad, expr_to_js(receiver, has_super, names), field, expr_to_js(value, has_super, names)));
             }
 
             JsStmt::ArraySet { arr, idx, value } => {
                 lines.push(format!("{}{}[{}] = {};",
-                                   pad, expr_to_js(arr, has_super), expr_to_js(idx, has_super), expr_to_js(value, has_super)));
+                                   pad, expr_to_js(arr, has_super, names), expr_to_js(idx, has_super, names), expr_to_js(value, has_super, names)));
             }
 
             JsStmt::Expr(e) => {
-                let rendered = expr_to_js(e, has_super);
+                let rendered = expr_to_js(e, has_super, names);
 
                 if !rendered.is_empty() {
                     lines.push(format!("{}{};", pad, rendered));
@@ -248,7 +249,7 @@ fn render_stmts(
             }
 
             JsStmt::Return(Some(e)) => {
-                lines.push(format!("{}return {};", pad, expr_to_js(e, has_super)));
+                lines.push(format!("{}return {};", pad, expr_to_js(e, has_super, names)));
             }
 
             JsStmt::If {
@@ -262,15 +263,15 @@ fn render_stmts(
                     (cond.clone(), then_body, else_body)
                 };
 
-                lines.push(format!("{}if ({}) {{", pad, simplify_cond(&cond, has_super)));
-                render_stmts(then_body, indent + 2, declared, lines, has_super);
+                lines.push(format!("{}if ({}) {{", pad, simplify_cond(&cond, has_super, names)));
+                render_stmts(then_body, indent + 2, declared, lines, has_super, names);
 
                 if else_body.is_empty() {
                     lines.push(format!("{}}}", pad));
                 } else {
                     lines.push(format!("{}}} else {{", pad));
 
-                    render_stmts(else_body, indent + 2, declared, lines, has_super);
+                    render_stmts(else_body, indent + 2, declared, lines, has_super, names);
 
                     lines.push(format!("{}}}", pad));
                 }
@@ -278,7 +279,7 @@ fn render_stmts(
 
             JsStmt::Loop { body } => {
                 lines.push(format!("{}while (true) {{", pad));
-                render_stmts(body, indent + 2, declared, lines, has_super);
+                render_stmts(body, indent + 2, declared, lines, has_super, names);
                 lines.push(format!("{}}}", pad));
             }
 
@@ -292,7 +293,7 @@ fn render_stmts(
             }
 
             JsStmt::Switch { expr, cases, default } => {
-                lines.push(format!("{}switch ({}) {{", pad, expr_to_js(expr, has_super)));
+                lines.push(format!("{}switch ({}) {{", pad, expr_to_js(expr, has_super, names)));
                 let mut i = 0;
                 while i < cases.len() {
                     let (key, body) = &cases[i];
@@ -312,7 +313,7 @@ fn render_stmts(
                             lines.push(format!("{}  case {}:", pad, cases[k].0));
                         }
                     }
-                    render_stmts(body, indent + 4, declared, lines, has_super);
+                    render_stmts(body, indent + 4, declared, lines, has_super, names);
                     let needs_break = !matches!(body.last(),
                         Some(JsStmt::Break | JsStmt::Return(_) | JsStmt::Continue)
                     ) && !matches!(body.last(),
@@ -327,7 +328,7 @@ fn render_stmts(
                 if let Some(body) = default {
                     lines.push(format!("{}  default: {{", pad));
 
-                    render_stmts(body, indent + 4, declared, lines, has_super);
+                    render_stmts(body, indent + 4, declared, lines, has_super, names);
 
                     let needs_break = !matches!(
         body.last(),
@@ -348,25 +349,25 @@ fn render_stmts(
 
             JsStmt::CondGoto { cond, target } => {
                 lines.push(format!("{}/* if ({}) goto {} */",
-                                   pad, expr_to_js(cond, has_super), target));
+                                   pad, expr_to_js(cond, has_super, names), target));
             }
 
             JsStmt::While { cond, body } => {
                 lines.push(format!(
                     "{}while ({}) {{",
                     pad,
-                    simplify_cond(cond, has_super),
+                    simplify_cond(cond, has_super, names),
                 ));
 
-                render_stmts(body, indent + 2, declared, lines, has_super);
+                render_stmts(body, indent + 2, declared, lines, has_super, names);
 
                 lines.push(format!("{}}}", pad));
             }
 
             JsStmt::DoWhile { body, cond } => {
                 lines.push(format!("{}do {{", pad));
-                render_stmts(body, indent + 2, declared, lines, has_super);
-                lines.push(format!("{}}} while ({});", pad, simplify_cond(cond, has_super)));
+                render_stmts(body, indent + 2, declared, lines, has_super, names);
+                lines.push(format!("{}}} while ({});", pad, simplify_cond(cond, has_super, names)));
             }
 
             JsStmt::Goto(target) => {
@@ -541,7 +542,7 @@ fn emit_methods(
     }
 }
 
-pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
+pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames) -> String {
     match expr {
         JsExpr::Null        => "null".into(),
         JsExpr::Bool(b)     => b.to_string(),
@@ -560,7 +561,7 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
             }
         }
         JsExpr::StaticFieldGet { class, field } => {
-            format!("{}.{}", class, field)
+            format!("{}.{}", names.resolve(class), field)
         }
         JsExpr::Str(s) => format!("\"{}\"", escape_js_string(s)),
         JsExpr::Reg(r)      => format!("v{}", r),
@@ -568,13 +569,13 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
         JsExpr::Raw(s)      => s.clone(),
 
         JsExpr::BitMask { expr, mask } => {
-            format!("({} {})", expr_to_js(expr, has_super), mask)
+            format!("({} {})", expr_to_js(expr, has_super, names), mask)
         }
 
         JsExpr::MethodCall { receiver, method, args } => {
-            let r = expr_to_js(receiver, has_super);
+            let r = expr_to_js(receiver, has_super, names);
             let a = args.iter()
-                .map(|e| expr_to_js(e, has_super))
+                .map(|e| expr_to_js(e, has_super, names))
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -583,7 +584,7 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
 
         JsExpr::SuperCall { args } => {
             let a = args.iter()
-                .map(|e| expr_to_js(e, has_super))
+                .map(|e| expr_to_js(e, has_super, names))
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -596,7 +597,7 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
 
         JsExpr::ThisCtorCall { args } => {
             let a = args.iter()
-                .map(|e| expr_to_js(e, has_super))
+                .map(|e| expr_to_js(e, has_super, names))
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -604,36 +605,36 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
         }
 
         JsExpr::StaticCall { class, method, args } => {
-            let a = args.iter().map(|e| expr_to_js(e, has_super)).collect::<Vec<_>>().join(", ");
+            let a = args.iter().map(|e| expr_to_js(e, has_super, names)).collect::<Vec<_>>().join(", ");
             if method.is_empty() {
-                format!("{}({})", class, a)
+                format!("{}({})", names.resolve(class), a)
             } else {
-                format!("{}.{}({})", class, method, a)
+                format!("{}.{}({})", names.resolve(class), method, a)
             }
         }
         JsExpr::New { class, args } => {
-            let a = args.iter().map(|e| expr_to_js(e, has_super)).collect::<Vec<_>>().join(", ");
-            format!("new {}({})", class, a)
+            let a = args.iter().map(|e| expr_to_js(e, has_super, names)).collect::<Vec<_>>().join(", ");
+            format!("new {}({})", names.resolve(class), a)
         }
         JsExpr::FieldGet { receiver, field } => {
-            js_prop(&expr_to_js(receiver, has_super), field)
+            js_prop(&expr_to_js(receiver, has_super, names), field)
         }
         JsExpr::BinOp { op, left, right } => {
-            format!("({} {} {})", expr_to_js(left, has_super), op, expr_to_js(right, has_super))
+            format!("({} {} {})", expr_to_js(left, has_super, names), op, expr_to_js(right, has_super, names))
         }
         JsExpr::UnaryOp { op, expr } => {
             match expr.as_ref() {
                 JsExpr::Reg(_) | JsExpr::MethodCall { .. } => {
-                    format!("{}{}",  op, expr_to_js(expr, has_super))
+                    format!("{}{}",  op, expr_to_js(expr, has_super, names))
                 }
-                _ => format!("({}{})", op, expr_to_js(expr, has_super))
+                _ => format!("({}{})", op, expr_to_js(expr, has_super, names))
             }
         }
 
         JsExpr::ArrayLiteral(items) => {
             let parts = items
                 .iter()
-                .map(|e| expr_to_js(e, has_super))
+                .map(|e| expr_to_js(e, has_super, names))
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -642,13 +643,13 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
 
         JsExpr::StringConcat(items) => {
             items.iter()
-                .map(|e| format!("String({})", expr_to_js(e, has_super)))
+                .map(|e| format!("String({})", expr_to_js(e, has_super, names)))
                 .collect::<Vec<_>>()
                 .join(" + ")
         }
 
         JsExpr::Index { arr, idx } => {
-            format!("{}[{}]", expr_to_js(arr, has_super), expr_to_js(idx, has_super))
+            format!("{}[{}]", expr_to_js(arr, has_super, names), expr_to_js(idx, has_super, names))
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::emit::render::expr_to_js;
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = elide_redundant_assigns(stmts);
@@ -225,7 +226,20 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
 }
 
 fn expr_to_str(expr: &JsExpr) -> String {
-    crate::extensions::apk_translator::translator::emit::render::expr_to_js(expr, false)
+    match expr {
+        JsExpr::Reg(r) => format!("v{}", r),
+        JsExpr::MethodCall { receiver, method, args } => {
+            let r = expr_to_str(receiver);
+            let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("{}.{}({})", r, method, a)
+        }
+        JsExpr::FieldGet { receiver, field } => format!("{}.{}", expr_to_str(receiver), field),
+        JsExpr::This => "this".into(),
+        JsExpr::Str(s) => format!("\"{}\"", s),
+        JsExpr::Int(n) => n.to_string(),
+        JsExpr::Null => "null".into(),
+        _ => "/* complex */".into(),
+    }
 }
 
 fn stmt_to_str(stmt: &JsStmt) -> Option<String> {
