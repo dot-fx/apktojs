@@ -45,6 +45,7 @@ pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_supe
     let mut all_regs: Vec<u8> = {
         let mut set = HashSet::new();
         collect_assigned_regs(&stmts, &mut set);
+        collect_read_regs(&stmts, &mut set);
         let mut v: Vec<u8> = set.into_iter().collect();
         v.sort();
         v
@@ -720,4 +721,69 @@ fn topo_sort_classes(
     }
 
     out
+}
+
+fn collect_read_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
+    for stmt in stmts {
+        match stmt {
+            JsStmt::Assign { expr, .. } => collect_read_regs_expr(expr, out),
+            JsStmt::Expr(e) => collect_read_regs_expr(e, out),
+            JsStmt::Return(Some(e)) => collect_read_regs_expr(e, out),
+            JsStmt::FieldSet { receiver, value, .. } => {
+                collect_read_regs_expr(receiver, out);
+                collect_read_regs_expr(value, out);
+            }
+            JsStmt::ArraySet { arr, idx, value } => {
+                collect_read_regs_expr(arr, out);
+                collect_read_regs_expr(idx, out);
+                collect_read_regs_expr(value, out);
+            }
+            JsStmt::If { cond, then_body, else_body } => {
+                collect_read_regs_expr(cond, out);
+                collect_read_regs(then_body, out);
+                collect_read_regs(else_body, out);
+            }
+            JsStmt::Loop { body } | JsStmt::While { body, .. } | JsStmt::DoWhile { body, .. } => {
+                collect_read_regs(body, out);
+            }
+            JsStmt::Switch { expr, cases, default } => {
+                collect_read_regs_expr(expr, out);
+                for (_, body) in cases { collect_read_regs(body, out); }
+                if let Some(d) = default { collect_read_regs(d, out); }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_read_regs_expr(expr: &JsExpr, out: &mut HashSet<u8>) {
+    match expr {
+        JsExpr::Reg(r) => { out.insert(*r); }
+        JsExpr::MethodCall { receiver, args, .. } => {
+            collect_read_regs_expr(receiver, out);
+            for a in args { collect_read_regs_expr(a, out); }
+        }
+        JsExpr::StaticCall { args, .. } | JsExpr::New { args, .. } => {
+            for a in args { collect_read_regs_expr(a, out); }
+        }
+        JsExpr::SuperCall { args } | JsExpr::ThisCtorCall { args } => {
+            for a in args { collect_read_regs_expr(a, out); }
+        }
+        JsExpr::BinOp { left, right, .. } => {
+            collect_read_regs_expr(left, out);
+            collect_read_regs_expr(right, out);
+        }
+        JsExpr::UnaryOp { expr, .. } | JsExpr::BitMask { expr, .. } => {
+            collect_read_regs_expr(expr, out);
+        }
+        JsExpr::FieldGet { receiver, .. } => collect_read_regs_expr(receiver, out),
+        JsExpr::Index { arr, idx } => {
+            collect_read_regs_expr(arr, out);
+            collect_read_regs_expr(idx, out);
+        }
+        JsExpr::ArrayLiteral(items) | JsExpr::StringConcat(items) => {
+            for i in items { collect_read_regs_expr(i, out); }
+        }
+        _ => {}
+    }
 }
