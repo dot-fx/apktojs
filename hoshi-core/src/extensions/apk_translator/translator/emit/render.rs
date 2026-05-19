@@ -428,6 +428,8 @@ pub fn render_class(
 
     let ordered = topo_sort_classes(&groups, pool);
 
+    let mut static_inits = Vec::new();
+
     for owner in ordered {
         let (_, group_methods) = groups.iter()
             .find(|(o, _)| *o == owner)
@@ -454,10 +456,7 @@ pub fn render_class(
 
         out.push_str("}\n\n");
         if group_methods.iter().any(|m| m.name == "<clinit>") {
-            out.push_str(&format!(
-                "if (typeof {}.__static_init__ === 'function') {}.__static_init__();\n\n",
-                simple, simple
-            ));
+            static_inits.push(simple.clone());
         }
     }
 
@@ -481,6 +480,13 @@ pub fn render_class(
     emit_methods(&mut out, &main_methods, class_name, true);
 
     out.push_str("}\n");
+
+    for cls in static_inits {
+        out.push_str(&format!(
+            "if (typeof {}.__static_init__ === 'function') {}.__static_init__();\n",
+            cls, cls
+        ));
+    }
 
     out
 }
