@@ -12,6 +12,7 @@ pub enum JsExpr {
         receiver: Box<JsExpr>,
         method: String,
         args: Vec<JsExpr>,
+        is_static: bool,
     },
 
     StaticCall {

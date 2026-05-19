@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dex::Dex;
-
+use dex::method::AccessFlags;
 use crate::extensions::apk_translator::translator::resolver::mappings::{
     from_dex_type,
     well_known_method,
@@ -21,6 +21,7 @@ pub struct MethodInfo {
     pub class_name: String,
     pub method_name: String,
     pub js_name: Option<String>,
+    pub is_static: bool,
 }
 
 #[derive(Clone)]
@@ -106,6 +107,7 @@ impl Pool {
                             class_name: class_name.clone(),
                             method_name: method_name.clone(),
                             js_name,
+                            is_static: false
                         },
                     );
 
@@ -142,6 +144,19 @@ impl Pool {
                 if let Ok(class) = class {
 
                     let class_name = from_dex_type(class.jtype().to_string().as_str());
+
+                    for m in class.methods() {
+                        let method_name = m.name().to_string();
+
+                        let is_static = m.access_flags().contains(AccessFlags::STATIC);
+
+                        if let Some(info) = methods.values_mut().find(|info| {
+                            info.class_name == class_name &&
+                                info.method_name == method_name
+                        }) {
+                            info.is_static = is_static;
+                        }
+                    }
 
                     if let Some(info) = type_info.get_mut(&class_name) {
 

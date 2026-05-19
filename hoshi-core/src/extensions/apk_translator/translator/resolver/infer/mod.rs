@@ -214,8 +214,7 @@ impl InferCtx {
 
     fn scan_resolved_expr(&mut self, expr: &JsExpr, pool: &Pool, shard: usize, reg_calls: &HashMap<u8, JsExpr>) {
         match expr {
-            JsExpr::MethodCall { receiver, method, args } => {
-                // Resolve method token to real name
+            JsExpr::MethodCall { receiver, method, args, .. } => {
                 let real_method = if let Some((token_shard, idx)) = parse_meth_token(method) {
                     pool.methods.get(&(token_shard, idx))
                         .map(|m| m.js_name.as_deref().unwrap_or(&m.method_name).to_string())

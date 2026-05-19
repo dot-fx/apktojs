@@ -9,6 +9,7 @@ pub struct JsMethod {
     pub name: String,
     pub body: String,
     pub defined_in: String,
+    pub is_static: bool,
 }
 
 fn hoist_super(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
@@ -528,7 +529,8 @@ fn emit_methods(
         );
 
         out.push_str(&format!(
-            "  {}({}) {{\n",
+            "  {}{}({}) {{\n",
+            if method.is_static { "static " } else { "" },
             render_method_name(&method.name),
             params
         ));
@@ -572,14 +574,19 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames) -> String {
             format!("({} {})", expr_to_js(expr, has_super, names), mask)
         }
 
-        JsExpr::MethodCall { receiver, method, args } => {
+        JsExpr::MethodCall { receiver, method, args, is_static } => {
             let r = expr_to_js(receiver, has_super, names);
+
             let a = args.iter()
                 .map(|e| expr_to_js(e, has_super, names))
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            format!("{}({})", js_prop(&r, method), a)
+            if *is_static {
+                format!("{}.{}({})", names.resolve(&r), method, a)
+            } else {
+                format!("{}({})", js_prop(&r, method), a)
+            }
         }
 
         JsExpr::SuperCall { args } => {

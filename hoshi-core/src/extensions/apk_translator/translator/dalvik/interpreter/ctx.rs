@@ -213,10 +213,15 @@ impl<'a> LiftCtx<'a> {
 
             Insn::InvokeSuper { args, method_idx } => {
                 let arg_exprs = args.iter().skip(1).map(|r| self.reg(*r)).collect();
+                let is_static = self.pool.methods
+                    .get(&(self.dex_shard, *method_idx))
+                    .map(|m| m.is_static)
+                    .unwrap_or(false);
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(JsExpr::Raw("super".into())),
                     method:   format!("_meth{}", method_idx),
                     args:     arg_exprs,
+                    is_static
                 };
                 self.result       = Some(call.clone());
                 self.pending_call = Some((off, call));
@@ -315,10 +320,16 @@ impl<'a> LiftCtx<'a> {
                         vec![]
                     };
 
+                let is_static = self.pool.methods
+                    .get(&(self.dex_shard, *method_idx))
+                    .map(|m| m.is_static)
+                    .unwrap_or(false);
+
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(recv),
                     method: self.method_ref(*method_idx),
                     args: call_args,
+                    is_static
                 };
 
                 self.result = Some(call.clone());
@@ -417,10 +428,16 @@ impl<'a> LiftCtx<'a> {
                     if args.len() > 1 { args[1..].to_vec() }
                     else { vec![] };
 
+                let is_static = self.pool.methods
+                    .get(&(self.dex_shard, *method_idx))
+                    .map(|m| m.is_static)
+                    .unwrap_or(false);
+
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(recv),
                     method: self.method_ref(*method_idx),
                     args: call_args,
+                    is_static,
                 };
 
                 self.result = Some(call.clone());
@@ -725,10 +742,16 @@ impl<'a> LiftCtx<'a> {
             }
         }
 
+        let is_static = self.pool.methods
+            .get(&(self.dex_shard, method_idx))
+            .map(|m| m.is_static)
+            .unwrap_or(false);
+
         JsExpr::MethodCall {
             receiver: Box::new(receiver),
             method: self.method_ref(method_idx),
             args: call_args,
+            is_static,
         }
     }
     fn binop(&mut self, dst: u8, a: u8, b: u8, op: &'static str, off: i32) {

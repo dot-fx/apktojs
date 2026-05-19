@@ -160,7 +160,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
     let (list_reg, list_expr) = match s0 {
         JsStmt::Assign {
             reg,
-            expr: JsExpr::MethodCall { receiver, method, args },
+            expr: JsExpr::MethodCall { receiver, method, args, .. },
         } if args.is_empty() && method != "iterator" => {
             (*reg, format!("{}.{}()", expr_to_str(receiver), method))
         }
@@ -170,7 +170,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
     match s1 {
         JsStmt::Assign {
             reg,
-            expr: JsExpr::MethodCall { receiver, method, args },
+            expr: JsExpr::MethodCall { receiver, method, args, .. },
         } if *reg == list_reg
             && method == "iterator"
             && args.is_empty()
@@ -181,7 +181,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
     let (item_reg, callback_stmts) = match s2 {
         JsStmt::While { cond, body } => {
             match cond {
-                JsExpr::MethodCall { receiver, method, args }
+                JsExpr::MethodCall { receiver, method, args, .. }
                 if method == "hasNext"
                     && args.is_empty()
                     && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) => {}
@@ -195,7 +195,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
             let item_reg = match &body[0] {
                 JsStmt::Assign {
                     reg,
-                    expr: JsExpr::MethodCall { receiver, method, args },
+                    expr: JsExpr::MethodCall { receiver, method, args, .. },
                 } if method == "next"
                     && args.is_empty()
                     && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) =>
@@ -228,7 +228,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
 fn expr_to_str(expr: &JsExpr) -> String {
     match expr {
         JsExpr::Reg(r) => format!("v{}", r),
-        JsExpr::MethodCall { receiver, method, args } => {
+        JsExpr::MethodCall { receiver, method, args, .. } => {
             let r = expr_to_str(receiver);
             let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
             format!("{}.{}({})", r, method, a)
@@ -316,17 +316,22 @@ fn rewrite_add_stmt(stmt: JsStmt) -> JsStmt {
 
 fn rewrite_add_expr(expr: JsExpr) -> JsExpr {
     match expr {
-        JsExpr::MethodCall { receiver, method, args } if method == "add" => {
+        JsExpr::MethodCall {
+            receiver,
+            method,
+            args,
+            is_static,
+        } if method == "add" => {
             JsExpr::MethodCall {
                 receiver,
                 method: "push".into(),
                 args,
+                is_static,
             }
         }
         other => other,
     }
 }
-
 pub fn elide_redundant_assigns(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut out: Vec<JsStmt> = Vec::with_capacity(stmts.len());
     let mut iter = stmts.into_iter().peekable();
