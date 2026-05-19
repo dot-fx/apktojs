@@ -4,16 +4,60 @@ use crate::extensions::apk_translator::translator::resolver::lookup::{lookup_fie
 use crate::extensions::apk_translator::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
-pub fn resolve(raw_js: &str, pool: &Pool) -> String {
+use std::collections::{HashMap, HashSet};
+
+pub struct TypeNames {
+    pub full_to_js: HashMap<String, String>,
+}
+
+impl TypeNames {
+    pub fn build(pool: &Pool) -> Self {
+        let mut used = HashSet::new();
+        let mut full_to_js = HashMap::new();
+
+        for ty in pool.type_info.keys() {
+            let simple = ty.split('.').last().unwrap_or(ty);
+
+            let final_name = if used.insert(simple.to_string()) {
+                simple.to_string()
+            } else {
+                let mut n = 2;
+
+                loop {
+                    let candidate = format!("{}_{}", simple, n);
+
+                    if used.insert(candidate.clone()) {
+                        break candidate;
+                    }
+
+                    n += 1;
+                }
+            };
+            full_to_js.insert(ty.clone(), final_name);
+        }
+        Self { full_to_js }
+    }
+
+    pub fn resolve(&self, ty: &str) -> String {
+        self.full_to_js
+            .get(ty)
+            .cloned()
+            .unwrap_or_else(|| {
+                ty.split('.').last().unwrap_or(ty).to_string()
+            })
+    }
+}
+
+pub fn resolve(raw_js: &str, pool: &Pool, names: &TypeNames) -> String {
     let mut js = raw_js.to_string();
 
     js = apply_well_known(&js);
     js = resolve_strings(&js, &pool);
-    js = resolve_static_methods(&js, &pool);
+    js = resolve_static_methods(&js, &pool, &names);
     js = resolve_fields(&js, &pool);
-    js = resolve_sfields(&js, &pool);
+    js = resolve_sfields(&js, &pool, &names);
     js = resolve_methods(&js, &pool);
-    js = resolve_types(&js, &pool);
+    js = resolve_types(&js, &pool, &names);
     js = resolve_lambdas(&js, &pool);
     js = remove_getclass_stmts(&js);
     js = remove_serializers_module_stmts(&js);
@@ -111,7 +155,7 @@ fn resolve_fields(js: &str, pool: &Pool) -> String {
     }).into_owned()
 }
 
-fn resolve_types(js: &str, pool: &Pool) -> String {
+fn resolve_types(js: &str, pool: &Pool, names: &TypeNames) -> String {
     let re = Regex::new(r"_type(\d+)_(\d+)").unwrap();
 
     re.replace_all(js, |caps: &regex::Captures| {
@@ -120,11 +164,7 @@ fn resolve_types(js: &str, pool: &Pool) -> String {
 
         match pool.types.get(&(shard, idx)) {
             Some(t) => {
-                kotlin_class_to_js(t)
-                    .split('.')
-                    .last()
-                    .unwrap_or(t)
-                    .to_string()
+                names.resolve(&kotlin_class_to_js(t))
             }
 
             None => format!("_type{}_{}", shard, idx),
@@ -132,7 +172,7 @@ fn resolve_types(js: &str, pool: &Pool) -> String {
     }).into_owned()
 }
 
-fn resolve_static_methods(js: &str, pool: &Pool) -> String {
+fn resolve_static_methods(js: &str, pool: &Pool, names: &TypeNames) -> String {
     let re = Regex::new(r"/\* static_meth(\d+) \*/").unwrap();
     re.replace_all(js, |caps: &regex::Captures| {
         let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
@@ -143,7 +183,7 @@ fn resolve_static_methods(js: &str, pool: &Pool) -> String {
                 }
                 match (m.class_name.split('.').last().unwrap_or(""), m.method_name.as_str()) {
                     _ => {
-                        let simple = m.class_name.split('.').last().unwrap_or(&m.class_name);
+                        let simple = names.resolve(&m.class_name);
                         format!("{}.{}", simple, m.method_name)
                     }
                 }
@@ -153,13 +193,13 @@ fn resolve_static_methods(js: &str, pool: &Pool) -> String {
     }).into_owned()
 }
 
-fn resolve_sfields(js: &str, pool: &Pool) -> String {
+fn resolve_sfields(js: &str, pool: &Pool, names: &TypeNames) -> String {
     let re = Regex::new(r"/\* static_field#(\d+) \*/").unwrap();
     re.replace_all(js, |caps: &regex::Captures| {
         let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
         match lookup_field(pool, idx) {
             Some(f) => {
-                let simple = f.class_name.split('.').last().unwrap_or(&f.class_name);
+                let simple = names.resolve(&f.class_name);
                 format!("{}.{}", simple, f.field_name)
             }
             None => format!("/* static_field#{} */", idx),

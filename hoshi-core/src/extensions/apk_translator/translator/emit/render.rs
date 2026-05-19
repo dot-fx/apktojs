@@ -3,6 +3,7 @@ use crate::extensions::apk_translator::{ApkMeta, WalkedSource};
 use crate::extensions::apk_translator::translator::dalvik::interpreter;
 use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::extensions::apk_translator::translator::resolver::resolve::TypeNames;
 
 pub struct JsMethod {
     pub name: String,
@@ -217,11 +218,7 @@ fn render_stmts(
             }
 
             JsStmt::StaticGet { class, field, dst } => {
-                if declared.insert(*dst) {
-                    lines.push(format!("{}let v{} = {}.{};", pad, dst, class, field));
-                } else {
-                    lines.push(format!("{}v{} = {}.{};", pad, dst, class, field));
-                }
+                lines.push(format!("{}v{} = {}.{};", pad, dst, class, field));
             }
 
             JsStmt::StaticSet { class, field, value } => {
@@ -390,7 +387,7 @@ pub fn render_class(
     methods:     &[JsMethod],
     walked:      &WalkedSource,
     pool: &Pool,
-    old_names:   &[String],
+    names: &TypeNames,
 ) -> String {
     let mut out = String::new();
 
@@ -426,18 +423,22 @@ pub fn render_class(
             && base_class != "java.lang.Object"
             && !base_class.ends_with(".Object");
 
-    for (owner, group_methods) in &groups {
-        if is_main(owner) { continue; }
+    let ordered = topo_sort_classes(&groups, pool);
 
-        let simple = owner.split('.').last().unwrap_or(owner);
-        let super_name = pool.type_info.get(owner)
+    for owner in ordered {
+        let (_, group_methods) = groups.iter()
+            .find(|(o, _)| *o == owner)
+            .unwrap();
+        if is_main(&*owner) { continue; }
+
+        let simple = names.resolve(&*owner);
+        let super_name = pool.type_info.get(&owner)
             .and_then(|t| t.superclass.as_deref())
             .filter(|&s| s != "Object" && s != "java.lang.Object" && !s.ends_with(".Object"));
 
 
-        let has_super = super_name.is_some();
         let extends_clause = super_name
-            .map(|s| format!(" extends {}", s.split('.').last().unwrap_or(s)))
+            .map(|s| format!(" extends {}", names.resolve(s)))
             .unwrap_or_default();
 
         out.push_str(&format!(
@@ -446,7 +447,7 @@ pub fn render_class(
             extends_clause
         ));
 
-        emit_methods(&mut out, group_methods, has_super, owner, class_name, &old_names, false);
+        emit_methods(&mut out, group_methods, &*owner, false);
 
         out.push_str("}\n\n");
     }
@@ -456,13 +457,9 @@ pub fn render_class(
         .flat_map(|(_, ms)| ms.iter().copied())
         .collect();
 
-    let actually_uses_super = main_methods.iter().any(|m| {
-        m.body.contains("super(")
-    });
-
     let extends_clause =
         if has_super {
-            format!(" extends {}", base_class)
+            format!(" extends {}", names.resolve(base_class))
         } else {
             String::new()
         };
@@ -472,7 +469,7 @@ pub fn render_class(
         class_name,
         extends_clause
     ));
-    emit_methods(&mut out, &main_methods, has_super, class_name, class_name, &old_names, true);
+    emit_methods(&mut out, &main_methods, class_name, true);
 
     out.push_str("}\n");
 
@@ -482,10 +479,7 @@ pub fn render_class(
 fn emit_methods(
     out: &mut String,
     methods: &[&JsMethod],
-    has_super: bool,
     owner_class: &str,
-    main_class: &str,
-    old_names: &[String],
     is_self: bool
 ) {
     out.push('\n');
@@ -529,8 +523,6 @@ fn emit_methods(
         body = fix_self_refs(
             &body,
             owner_class,
-            main_class,
-            old_names,
             is_self,
         );
 
@@ -664,23 +656,9 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool) -> String {
 fn fix_self_refs(
     body: &str,
     owner_class: &str,
-    main_class: &str,
-    old_names: &[String],
     is_self: bool
 ) -> String {
     let mut out = body.to_string();
-
-    for old in old_names {
-        let from = format!("{}.", old);
-        let to = format!("{}.", main_class);
-
-        if out.contains(&from) {
-            eprintln!("replace: {:?} -> {:?}", from, to);
-        }
-
-        out = out.replace(&from, &to);
-    }
-
     if is_self {
         let from = format!("new {}(", owner_class);
 
@@ -692,6 +670,45 @@ fn fix_self_refs(
             &from,
             "new this.constructor("
         );
+    }
+
+    out
+}
+
+fn topo_sort_classes(
+    groups: &[(String, Vec<&JsMethod>)],
+    pool: &Pool,
+) -> Vec<String> {
+    fn visit(
+        cls: &str,
+        pool: &Pool,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<String>,
+        existing: &HashSet<String>,
+    ) {
+        if !seen.insert(cls.to_string()) {
+            return;
+        }
+
+        if let Some(super_cls) = pool.type_info.get(cls)
+            .and_then(|t| t.superclass.as_deref())
+        {
+            if existing.contains(super_cls) {
+                visit(super_cls, pool, seen, out, existing);
+            }
+        }
+
+        out.push(cls.to_string());
+    }
+
+    let existing: HashSet<String> =
+        groups.iter().map(|(c, _)| c.clone()).collect();
+
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    for (cls, _) in groups {
+        visit(cls, pool, &mut seen, &mut out, &existing);
     }
 
     out

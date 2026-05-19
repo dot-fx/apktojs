@@ -133,13 +133,23 @@ pub fn translate(
         }
     }
 
-    let old_names: Vec<String> = renames.keys().cloned().collect();
+    let names = resolver::resolve::TypeNames::build(&pool_mut);
 
     let raw_js = emit::render::render_class(
-        &meta.name, base_class, meta, &js_methods, walked, &pool_mut, &old_names
+        &meta.name,
+        base_class,
+        meta,
+        &js_methods,
+        walked,
+        &pool_mut,
+        &names,
     );
 
-    let resolved = resolver::resolve::resolve(&raw_js, &pool_mut);
+    let resolved = resolver::resolve::resolve(
+        &raw_js,
+        &pool_mut,
+        &names,
+    );
 
     Ok(TranslatedSource { js: resolved, warnings })
 }
