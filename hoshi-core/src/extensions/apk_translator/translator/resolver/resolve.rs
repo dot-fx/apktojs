@@ -96,15 +96,20 @@ fn resolve_lambdas(js: &str, pool: &Pool) -> String {
             return caps[0].to_string();
         };
 
+        let superclass = info.superclass.as_deref().unwrap_or("");
+
+        let is_suspend_lambda =
+            superclass.contains("SuspendLambda")
+                || superclass.contains("ContinuationImpl");
+
         let is_lambda =
-            info.superclass
-                .as_deref()
-                .map(|s| s.contains("kotlin.jvm.internal.Lambda"))
-                .unwrap_or(false)
-                ||
-                info.interfaces.iter().any(|i| {
+            !is_suspend_lambda
+                && (
+                superclass.contains("kotlin.jvm.internal.Lambda")
+                    || info.interfaces.iter().any(|i| {
                     i.starts_with("kotlin.jvm.functions.Function")
-                });
+                })
+            );
 
         if !is_lambda {
             return caps[0].to_string();
