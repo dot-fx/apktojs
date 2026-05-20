@@ -152,12 +152,6 @@ pub fn translate(
         &names,
     );
 
-    for (i, line) in raw_js.lines().enumerate() {
-        if line.contains("m0.a") {
-            eprintln!("[pre-resolve] line {}: {}", i, line.trim());
-        }
-    }
-
     let resolved = resolver::resolve::resolve(
         &raw_js,
         &pool_mut,
