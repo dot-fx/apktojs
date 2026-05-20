@@ -462,11 +462,6 @@ pub fn render_class(
             || walked.hierarchy.first().map(|h| h == owner).unwrap_or(false)
     };
 
-    let has_super =
-        base_class != "Object"
-            && base_class != "java.lang.Object"
-            && !base_class.ends_with(".Object");
-
     let ordered = topo_sort_classes(&groups, pool);
 
     let mut static_inits = Vec::new();
@@ -475,15 +470,23 @@ pub fn render_class(
         let (_, group_methods) = groups.iter()
             .find(|(o, _)| *o == owner)
             .unwrap();
-        if is_main(&*owner) { continue; }
 
         let simple = names.resolve(&*owner);
-        let super_name = pool.type_info.get(&owner)
-            .and_then(|t| t.superclass.as_deref())
-            .filter(|&s| s != "Object" && s != "java.lang.Object" && !s.ends_with(".Object"));
+        let super_name: Option<&str> =
+            if is_main(&owner) {
+                Some(base_class)
+            } else {
+                pool.type_info.get(&owner)
+                    .and_then(|t| t.superclass.as_deref())
+            };
 
 
         let extends_clause = super_name
+            .filter(|&s|
+                s != "Object"
+                    && s != "java.lang.Object"
+                    && !s.ends_with(".Object")
+            )
             .map(|s| format!(" extends {}", names.resolve(s)))
             .unwrap_or_default();
 
@@ -493,34 +496,13 @@ pub fn render_class(
             extends_clause
         ));
 
-        emit_methods(&mut out, group_methods, &*owner, false);
+        emit_methods(&mut out, group_methods, &*owner, is_main(&owner));
 
         out.push_str("}\n\n");
         if group_methods.iter().any(|m| m.name == "<clinit>") {
             static_inits.push(simple.clone());
         }
     }
-
-    let main_methods: Vec<&JsMethod> = groups.iter()
-        .filter(|(owner, _)| is_main(owner))
-        .flat_map(|(_, ms)| ms.iter().copied())
-        .collect();
-
-    let extends_clause =
-        if has_super {
-            format!(" extends {}", names.resolve(base_class))
-        } else {
-            String::new()
-        };
-
-    out.push_str(&format!(
-        "class {}{} {{\n",
-        class_name,
-        extends_clause
-    ));
-    emit_methods(&mut out, &main_methods, class_name, true);
-
-    out.push_str("}\n");
 
     let re = regex::Regex::new(r"new (\w+)\(").unwrap();
     let static_init_set: HashSet<String> = static_inits.iter().cloned().collect();
