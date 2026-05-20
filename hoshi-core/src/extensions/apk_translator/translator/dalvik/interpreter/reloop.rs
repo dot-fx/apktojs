@@ -51,6 +51,7 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
         &mut HashSet::new(),
         &mut out,
         0,
+        None
     );
 
     out
@@ -69,6 +70,7 @@ fn reloop(
     visited:      &mut HashSet<usize>,
     out:          &mut Vec<JsStmt>,
     depth:        usize,
+    consumed_pred_offset: Option<i32>,
 ){
     if depth > MAX_DEPTH { return; }
 
@@ -89,24 +91,17 @@ fn reloop(
         {
             let loop_end = cfg::find_loop_end(blocks, idx, block.offset, b2i);
 
-
-            for bi in idx..blocks.len() {
-                let b = &blocks[bi];
-                if b.offset >= loop_end {
-                    break;
-                }
-            }
-
             let mut loop_visited = HashSet::new();
             loop_visited.insert(idx);
 
-            let (header_cond, consumed_stmt): (Option<JsExpr>, Option<usize>) =
+            let (header_cond, consumed_stmt, consumed_pred_offset) =
                 match block_is_loop_guard(block, loop_end) {
                     Some(c) => {
-                        let (cond, stmt) = resolve_loop_condition(block, c);
-                        (Some(cond), stmt)
+                        let (cond, stmt, pred_off) =
+                            resolve_loop_condition(block, c, blocks, b2i, preds);
+                        (Some(cond), stmt, pred_off)
                     }
-                    None => (None, None),
+                    None => (None, None, None),
                 };
 
             let mut body = Vec::new();
@@ -128,6 +123,7 @@ fn reloop(
                 &mut loop_visited,
                 &mut body,
                 depth + 1,
+                consumed_pred_offset
             );
 
             if matches!(body.last(), Some(JsStmt::Continue)) {
@@ -135,7 +131,13 @@ fn reloop(
             }
 
             if let Some(cond) = header_cond {
-                if cond_regs_written_in_body(&cond, &body) {
+                let safe_to_hoist =
+                    consumed_stmt.is_some()
+                        || block.stmts.is_empty();
+
+                if safe_to_hoist && !cond_regs_written_in_body(&cond, &body) {
+                    out.push(JsStmt::While { cond, body });
+                } else {
                     let mut safe_body = vec![
                         JsStmt::If {
                             cond: interpreter::negate(cond),
@@ -143,10 +145,12 @@ fn reloop(
                             else_body: vec![],
                         },
                     ];
+
                     safe_body.extend(body);
-                    out.push(JsStmt::Loop { body: safe_body });
-                } else {
-                    out.push(JsStmt::While { cond, body });
+
+                    out.push(JsStmt::Loop {
+                        body: safe_body,
+                    });
                 }
             } else if let Some((cond, break_idx)) = recover_loop_condition(&body) {
                 let mut body = body;
@@ -164,7 +168,12 @@ fn reloop(
 
         visited.insert(idx);
 
-        out.extend(block.stmts.iter().cloned());
+        let emit_stmts = if consumed_pred_offset == Some(block.offset) {
+            &block.stmts[..block.stmts.len().saturating_sub(1)]
+        } else {
+            &block.stmts[..]
+        };
+        out.extend(emit_stmts.iter().cloned());
 
         match &block.term {
             Terminator::Return(e) => {
@@ -232,25 +241,27 @@ fn reloop(
 
                 let join = find_join_relooper(blocks, b2i, fall_idx, branch_idx, until, block.offset);
 
+                // then = true branch
                 let mut then_body = Vec::new();
-                let mut then_visited = visited.clone();
-                reloop(blocks, b2i, loop_headers, preds,
-                       fall_idx, join, loop_exit, current_loop,
-                       &mut then_visited, &mut then_body, depth + 1);
-
-                let mut else_body = Vec::new();
                 if branch_idx < blocks.len() {
-                    let mut else_visited = visited.clone();
+                    let mut then_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            branch_idx, join, loop_exit, current_loop,
-                           &mut else_visited, &mut else_body, depth + 1);
+                           &mut then_visited, &mut then_body, depth + 1, None);
                 }
+
+                // else = false branch (fall-through)
+                let mut else_body = Vec::new();
+                let mut else_visited = visited.clone();
+                reloop(blocks, b2i, loop_headers, preds,
+                       fall_idx, join, loop_exit, current_loop,
+                       &mut else_visited, &mut else_body, depth + 1, None);
 
                 if !then_body.is_empty() || !else_body.is_empty() {
                     out.push(JsStmt::If {
                         cond,
-                        then_body: else_body,
-                        else_body: then_body,
+                        then_body,
+                        else_body,
                     });
                 }
 
@@ -293,7 +304,7 @@ fn reloop(
                     let mut case_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            case_start, stop, loop_exit, current_loop,
-                           &mut case_visited, &mut case_body, depth + 1);
+                           &mut case_visited, &mut case_body, depth + 1, None);
                     post_switch_visited.extend(case_visited);
 
                     let mut keys = target_keys[&t].clone();
@@ -311,7 +322,7 @@ fn reloop(
                     reloop(
                         blocks, b2i, loop_headers, preds,
                         default_start, switch_end, loop_exit, current_loop,
-                        &mut default_visited, &mut default_body, depth + 1,
+                        &mut default_visited, &mut default_body, depth + 1, None
                     );
 
                     post_switch_visited.extend(default_visited);
@@ -482,25 +493,77 @@ fn body_writes_any_reg(stmts: &[JsStmt], regs: &HashSet<u8>) -> bool {
     false
 }
 
+// Add this helper function above resolve_loop_condition
+fn substitute_reg(expr: &mut JsExpr, target: u8, replacement: &JsExpr) {
+    match expr {
+        JsExpr::Reg(r) => {
+            if *r == target {
+                *expr = replacement.clone();
+            }
+        }
+        JsExpr::BinOp { left, right, .. } => {
+            substitute_reg(&mut **left, target, replacement);
+            substitute_reg(&mut **right, target, replacement);
+        }
+        JsExpr::UnaryOp { expr: inner, .. } => {
+            substitute_reg(&mut **inner, target, replacement);
+        }
+        JsExpr::MethodCall { receiver, args, .. } => {
+            substitute_reg(&mut **receiver, target, replacement);
+            for a in args {
+                substitute_reg(a, target, replacement);
+            }
+        }
+        _ => {}
+    }
+}
+
+// Replace your existing resolve_loop_condition with this updated version
 fn resolve_loop_condition(
     block: &BasicBlock,
     cond: JsExpr,
-) -> (JsExpr, Option<usize>) {
-    let cond = strip_double_negation(cond);
+    blocks: &[BasicBlock],
+    b2i: &HashMap<i32, usize>,
+    preds: &[Vec<usize>],
+) -> (JsExpr, Option<usize>, Option<i32>) {
+    // eprintln!("resolve_loop_condition: header @{} stmts={:?} cond={:?}", block.offset, block.stmts, cond);
+    let mut cond = strip_double_negation(cond);
 
-    match cond {
-        JsExpr::Reg(r) => {
-            for (i, stmt) in block.stmts.iter().enumerate().rev() {
-                if let JsStmt::Assign { reg, expr } = stmt {
-                    if *reg == r {
-                        return (expr.clone(), Some(i));
-                    }
+    // 1. Identify if the condition strictly relies on exactly ONE register
+    let mut cond_regs = HashSet::new();
+    collect_expr_regs(&cond, &mut cond_regs);
+
+    if cond_regs.len() != 1 {
+        return (cond, None, None);
+    }
+
+    let r = *cond_regs.iter().next().unwrap();
+
+    // 2. Search header block itself
+    for (i, stmt) in block.stmts.iter().enumerate().rev() {
+        if let JsStmt::Assign { reg, expr } = stmt {
+            if *reg == r {
+                substitute_reg(&mut cond, r, expr);
+                return (cond, Some(i), None);
+            }
+        }
+    }
+
+    // 3. Search predecessors
+    let idx = b2i[&block.offset];
+    for &pred_idx in &preds[idx] {
+        let pred = &blocks[pred_idx];
+        // skip back-edges (predecessor is inside the loop)
+        if pred.offset >= block.offset { continue; }
+        for (_, stmt) in pred.stmts.iter().enumerate().rev() {
+            if let JsStmt::Assign { reg, expr } = stmt {
+                if *reg == r {
+                    substitute_reg(&mut cond, r, expr);
+                    return (cond, None, Some(pred.offset));
                 }
             }
-
-            (JsExpr::Reg(r), None)
         }
-
-        other => (other, None),
     }
+
+    (cond, None, None)
 }

@@ -135,6 +135,20 @@ pub fn negate(cond: JsExpr) -> JsExpr {
                 "===" => "!==", "!==" => "===",
                 "<"  => ">=",  ">=" => "<",
                 ">"  => "<=",  "<=" => ">",
+                "&&" => {
+                    return JsExpr::BinOp {
+                        op: "||",
+                        left:  Box::new(negate(*left)),
+                        right: Box::new(negate(*right)),
+                    };
+                }
+                "||" => {
+                    return JsExpr::BinOp {
+                        op: "&&",
+                        left:  Box::new(negate(*left)),
+                        right: Box::new(negate(*right)),
+                    };
+                }
                 _ => return JsExpr::UnaryOp {
                     op: "!",
                     expr: Box::new(JsExpr::BinOp { op, left, right }),
@@ -142,9 +156,8 @@ pub fn negate(cond: JsExpr) -> JsExpr {
             };
             JsExpr::BinOp { op: flipped, left, right }
         }
-        JsExpr::UnaryOp { op: "!", expr } if matches!(*expr, JsExpr::UnaryOp { op: "!", .. }) => {
-            if let JsExpr::UnaryOp { expr: inner, .. } = *expr { *inner } else { unreachable!() }
-        }
+        // negate(!x) → x  (single negation elimination)
+        JsExpr::UnaryOp { op: "!", expr } => *expr,
         other => JsExpr::UnaryOp { op: "!", expr: Box::new(other) },
     }
 }

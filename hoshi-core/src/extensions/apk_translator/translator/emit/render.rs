@@ -253,8 +253,28 @@ fn render_stmts(
             }
 
             JsStmt::FieldSet { receiver, field, value } => {
-                lines.push(format!("{}{}.{} = {};",
-                                   pad, expr_to_js(receiver, has_super, names, pool), field, expr_to_js(value, has_super, names, pool)));
+                let receiver_js = expr_to_js(receiver, has_super, names, pool);
+
+                let field_name = match receiver {
+                    JsExpr::This => {
+                        if let Some(owner) = pool.type_info.values().find(|t| {
+                            t.methods.iter().any(|m| m == field)
+                        }) {
+                            format!("{}_val", field)
+                        } else {
+                            field.clone()
+                        }
+                    }
+                    _ => field.clone()
+                };
+
+                lines.push(format!(
+                    "{}{}.{} = {};",
+                    pad,
+                    receiver_js,
+                    field_name,
+                    expr_to_js(value, has_super, names, pool)
+                ));
             }
 
             JsStmt::ArraySet { arr, idx, value } => {
@@ -712,7 +732,25 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
             format!("new {}({})", names.resolve(class), a)
         }
         JsExpr::FieldGet { receiver, field } => {
-            js_prop(&expr_to_js(receiver, has_super, names, pool), field)
+            let field_name = match receiver.as_ref() {
+                JsExpr::This => {
+                    let has_conflict = pool.type_info.values().any(|t| {
+                        t.methods.iter().any(|m| m == field)
+                    });
+
+                    if has_conflict {
+                        format!("{}_val", field)
+                    } else {
+                        field.clone()
+                    }
+                }
+                _ => field.clone()
+            };
+
+            js_prop(
+                &expr_to_js(receiver, has_super, names, pool),
+                &field_name
+            )
         }
         JsExpr::BinOp { op, left, right } => {
             format!("({} {} {})", expr_to_js(left, has_super, names, pool), op, expr_to_js(right, has_super, names, pool))
