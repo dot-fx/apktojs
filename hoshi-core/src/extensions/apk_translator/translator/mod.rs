@@ -104,7 +104,8 @@ pub fn translate(
             4,
             method_name,
             has_super,
-            &names
+            &names,
+            &pool
         );
 
         js_methods.push(emit::render::JsMethod {
@@ -147,6 +148,12 @@ pub fn translate(
         &pool_mut,
         &names,
     );
+
+    for (i, line) in raw_js.lines().enumerate() {
+        if line.contains("m0.a") {
+            eprintln!("[pre-resolve] line {}: {}", i, line.trim());
+        }
+    }
 
     let resolved = resolver::resolve::resolve(
         &raw_js,

@@ -15,7 +15,22 @@ impl TypeNames {
         let mut used = HashSet::new();
         let mut full_to_js = HashMap::new();
 
+        let reserved = [
+            ("java.lang.String", "String"),
+            ("java.lang.StringBuilder", "StringBuilder"),
+            ("java.lang.Integer", "Integer"),
+            ("java.lang.Boolean", "Boolean"),
+            ("java.lang.Object", "Object"),
+            ("java.util.ArrayList", "ArrayList"),
+            ("kotlin.collections.ArrayList", "ArrayList"),
+        ];
+        for (full, simple) in reserved {
+            used.insert(simple.to_string());
+            full_to_js.insert(full.to_string(), simple.to_string());
+        }
+
         for ty in pool.type_info.keys() {
+            if full_to_js.contains_key(ty.as_str()) { continue; }
             let simple = ty.split('.').last().unwrap_or(ty);
 
             let final_name = if used.insert(simple.to_string()) {

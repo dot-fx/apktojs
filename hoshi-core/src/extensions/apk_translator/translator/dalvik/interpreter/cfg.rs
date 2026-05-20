@@ -185,8 +185,17 @@ pub fn find_switch_end(
     default: i32,
     until:   i32,
 ) -> i32 {
+    let all_targets: Vec<i32> = cases.iter().map(|&(_, t)| t)
+        .chain(std::iter::once(default).filter(|&d| d != -1))
+        .collect();
+
+    let max_target = match all_targets.iter().copied().max() {
+        Some(m) => m,
+        None => return until,
+    };
+
+    // Walk forward from the last target block until we exit
     let mut candidate_ends: Vec<i32> = Vec::new();
-    let all_targets: Vec<i32> = cases.iter().map(|&(_, t)| t).chain(std::iter::once(default)).collect();
 
     for &t in &all_targets {
         if let Some(&ti) = b2i.get(&t) {
@@ -196,17 +205,13 @@ pub fn find_switch_end(
                     Some(cb) => cb,
                     None => break,
                 };
-
-                if cb.offset >= until {
-                    break;
-                }
-
+                if cb.offset >= until { break; }
                 match &cb.term {
                     Terminator::FallThrough(n) => {
                         ci = b2i.get(n).copied().unwrap_or(blocks.len());
                     }
                     Terminator::Goto(g) => {
-                        if *g > cb.offset {
+                        if *g > max_target {
                             candidate_ends.push(*g);
                         }
                         break;
@@ -223,7 +228,12 @@ pub fn find_switch_end(
     }
 
     if candidate_ends.is_empty() {
-        return until;
+        // fallback: first block offset strictly after all targets
+        return blocks.iter()
+            .map(|b| b.offset)
+            .filter(|&o| o > max_target && o <= until)
+            .min()
+            .unwrap_or(until);
     }
 
     let mut freq: HashMap<i32, usize> = HashMap::new();

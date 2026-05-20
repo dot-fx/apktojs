@@ -271,12 +271,22 @@ fn reloop(
                         Vec::new()
                     }).push(key);
                 }
-
                 let mut resolved_cases: Vec<(i32, Vec<JsStmt>)> = Vec::new();
+                let mut post_switch_visited: HashSet<usize> = HashSet::new();
 
-                for (ti, &t) in target_order.iter().enumerate() {
-                    let next_t = target_order.get(ti + 1).copied().unwrap_or(switch_end);
-                    let stop   = next_t.min(switch_end);
+                target_order.sort_by_key(|&t| {
+                    target_keys[&t].iter().copied().min().unwrap_or(i32::MAX)
+                });
+
+                let mut offset_order = target_order.clone();
+                offset_order.sort_by_key(|&t| b2i.get(&t).copied().unwrap_or(usize::MAX));
+                let offset_stops: HashMap<i32, i32> = offset_order.iter().enumerate().map(|(ti, &t)| {
+                    let next_t = offset_order.get(ti + 1).copied().unwrap_or(switch_end);
+                    (t, next_t.min(switch_end))
+                }).collect();
+
+                for &t in target_order.iter() {
+                    let stop = offset_stops[&t];
 
                     let case_start = b2i.get(&t).copied().unwrap_or(blocks.len());
                     let mut case_body = Vec::new();
@@ -284,41 +294,33 @@ fn reloop(
                     reloop(blocks, b2i, loop_headers, preds,
                            case_start, stop, loop_exit, current_loop,
                            &mut case_visited, &mut case_body, depth + 1);
-                    visited.extend(case_visited.into_iter());
+                    post_switch_visited.extend(case_visited);
 
-                    for &k in &target_keys[&t] {
-                        resolved_cases.push((k, case_body.clone()));
+                    let mut keys = target_keys[&t].clone();
+                    keys.sort();
+                    for &k in &keys {
+                        resolved_cases.push((k, case_body.clone())); // same body for all keys
                     }
                 }
-                resolved_cases.sort_by_key(|(k, _)| *k);
 
                 let resolved_default = if default != -1 {
                     let default_start = b2i.get(&default).copied().unwrap_or(blocks.len());
-
                     let mut default_body = Vec::new();
                     let mut default_visited = visited.clone();
 
                     reloop(
-                        blocks,
-                        b2i,
-                        loop_headers,
-                        preds,
-                        default_start,
-                        switch_end,
-                        loop_exit,
-                        current_loop,
-                        &mut default_visited,
-                        &mut default_body,
-                        depth + 1,
+                        blocks, b2i, loop_headers, preds,
+                        default_start, switch_end, loop_exit, current_loop,
+                        &mut default_visited, &mut default_body, depth + 1,
                     );
 
-                    visited.extend(default_visited.into_iter());
-
+                    post_switch_visited.extend(default_visited);
                     Some(default_body)
                 } else {
                     None
                 };
 
+                visited.extend(post_switch_visited);
                 out.push(JsStmt::Switch {
                     expr,
                     cases: resolved_cases,
