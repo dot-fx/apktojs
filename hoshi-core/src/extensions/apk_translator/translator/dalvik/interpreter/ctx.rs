@@ -28,17 +28,15 @@ impl<'a> LiftCtx<'a> {
 
     fn set(&mut self, r: u8, expr: JsExpr, offset: i32) {
         if let JsExpr::Reg(s) = &expr {
-            if *s == r {
-                return;
-            }
+            if *s == r { return; }
         }
 
-        self.push(offset, JsStmt::Assign {
-            reg: r,
-            expr,
-        });
-
+        self.push(offset, JsStmt::Assign { reg: r, expr });
         self.regs.insert(r, JsExpr::Reg(r));
+
+        if let Some(tr) = self.this_reg {
+            self.regs.insert(tr, JsExpr::This);
+        }
     }
 
     fn push(&mut self, offset: i32, stmt: JsStmt) {
@@ -242,8 +240,8 @@ impl<'a> LiftCtx<'a> {
                             args: ctor_args,
                         };
 
-                        self.result = Some(expr.clone());
                         self.set(recv_reg, expr, off);
+                        self.pending_call = None;
                         return;
                     }
 
@@ -346,13 +344,7 @@ impl<'a> LiftCtx<'a> {
                     self.pool.methods.get(&(self.dex_shard, *method_idx));
 
                 let class = info
-                    .map(|m| {
-                        m.class_name
-                            .split('.')
-                            .last()
-                            .unwrap_or(&m.class_name)
-                            .to_string()
-                    })
+                    .map(|m| m.class_name.clone())
                     .unwrap_or_else(|| "UnknownClass".into());
 
                 let method = self.method_ref(*method_idx);

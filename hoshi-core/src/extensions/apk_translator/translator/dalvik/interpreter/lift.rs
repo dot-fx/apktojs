@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use crate::extensions::apk_translator::translator::dalvik::insn::{DecodedInsn, Insn};
 use crate::extensions::apk_translator::translator::dalvik::interpreter::ctx::LiftCtx;
 use crate::extensions::apk_translator::translator::dalvik::interpreter::{reloop, JsExpr, JsStmt, TaggedStmt};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::cleanup::{cleanup, elide_redundant_assigns};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::cleanup::{cleanup};
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 pub fn lift(

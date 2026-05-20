@@ -87,7 +87,10 @@ pub fn translate(
         }
     }
 
-    let names = resolver::resolve::TypeNames::build(&pool_mut);
+    let mut names = resolver::resolve::TypeNames::build(&pool_mut);
+    for (full_name, new_name) in &renames {
+        names.full_to_js.insert(full_name.clone(), new_name.clone());
+    }
 
     for (stmts, method_name, defined_in, is_static) in &lifted {
         let has_super = pool.type_info.get(defined_in)

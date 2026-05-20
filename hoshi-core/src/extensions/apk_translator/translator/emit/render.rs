@@ -683,16 +683,21 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
         }
 
         JsExpr::MethodCall { receiver, method, args, is_static } => {
-            let r = expr_to_js(receiver, has_super, names, pool);
-
             let a = args.iter()
                 .map(|e| expr_to_js(e, has_super, names, pool))
                 .collect::<Vec<_>>()
                 .join(", ");
 
             if *is_static {
-                format!("{}.{}({})", names.resolve(&r), method, a)
+                eprintln!("[static call] receiver={:?} method={}", receiver, method);
+
+                let class_name = match receiver.as_ref() {
+                    JsExpr::Raw(s) => names.resolve(s),
+                    _ => expr_to_js(receiver, has_super, names, pool),
+                };
+                format!("{}.{}({})", class_name, method, a)
             } else {
+                let r = expr_to_js(receiver, has_super, names, pool);
                 format!("{}({})", js_prop(&r, method), a)
             }
         }
