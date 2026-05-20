@@ -168,7 +168,6 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
                 || fq.starts_with("kotlin.")
                 || fq.starts_with("android.")
                 || fq.starts_with("androidx.")
-                || fq.starts_with("eu.kanade.tachiyomi.")
                 || hierarchy.contains(&fq)
                 || helper_seen_classes.contains(&fq)
             {

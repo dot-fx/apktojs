@@ -481,7 +481,44 @@ pub fn render_class(
 
     out.push_str("}\n");
 
-    for cls in static_inits {
+    let re = regex::Regex::new(r"new (\w+)\(").unwrap();
+    let static_init_set: HashSet<String> = static_inits.iter().cloned().collect();
+    let mut si_deps: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for cls in &static_inits {
+        let body = methods.iter()
+            .find(|m| m.name == "<clinit>" && names.resolve(&m.defined_in) == *cls)
+            .map(|m| m.body.as_str())
+            .unwrap_or("");
+
+        let ctor_body = methods.iter()
+            .find(|m| m.name == "<init>" && names.resolve(&m.defined_in) == *cls)
+            .map(|m| m.body.as_str())
+            .unwrap_or("");
+
+        let combined = format!("{}\n{}", body, ctor_body);
+
+        let re2 = regex::Regex::new(r"(\w+)\.Companion").unwrap();
+
+        let deps: Vec<String> = re.captures_iter(&combined)
+            .map(|c| c[1].to_string())
+            .chain(re2.captures_iter(&combined).map(|c| c[1].to_string()))
+            .filter(|c| static_init_set.contains(c) && c != cls)
+            .collect();
+        si_deps.insert(cls.clone(), deps);
+    }
+    fn si_visit(cls: &str, deps: &std::collections::HashMap<String, Vec<String>>, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+        if !seen.insert(cls.to_string()) { return; }
+        if let Some(d) = deps.get(cls) {
+            for dep in d.clone() { si_visit(&dep, deps, seen, out); }
+        }
+        out.push(cls.to_string());
+    }
+    let mut si_seen = HashSet::new();
+    let mut sorted_inits = Vec::new();
+    for cls in &static_inits {
+        si_visit(cls, &si_deps, &mut si_seen, &mut sorted_inits);
+    }
+    for cls in sorted_inits {
         out.push_str(&format!(
             "if (typeof {}.__static_init__ === 'function') {}.__static_init__();\n",
             cls, cls

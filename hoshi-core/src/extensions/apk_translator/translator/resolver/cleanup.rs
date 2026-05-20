@@ -71,7 +71,7 @@ pub fn collapse_companion_chains(js: &str) -> String {
                     let pad = " ".repeat(next.len() - next.trim_start().len());
                     let is_let = lines[i].trim().starts_with("let ");
                     let decl = if is_let { "let " } else { "" };
-                    out.push(format!("{}{}{} = {}.{}", pad, decl, var, class, rest));
+                    out.push(format!("{}{}{} = {}.Companion.{}", pad, decl, var, class, rest));
                     i += 2;
                     continue;
                 }
