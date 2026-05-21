@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
 use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
-use crate::extensions::apk_translator::translator::emit::render;
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 
 pub struct LiftCtx<'a> {
@@ -656,6 +655,10 @@ impl<'a> LiftCtx<'a> {
             Insn::RemInt2Addr(d,s) => self.binop2addr(*d,*s,"%",off),
             Insn::AndInt2Addr(d,s) => self.binop2addr(*d,*s,"&",off),
             Insn::OrInt2Addr(d,s)  => self.binop2addr(*d,*s,"|",off),
+            Insn::XorInt2Addr(d,s)  => self.binop2addr(*d,*s,"^",off),
+            Insn::ShlInt2Addr(d,s)  => self.binop2addr(*d,*s,"<<",off),
+            Insn::ShrInt2Addr(d,s)  => self.binop2addr(*d,*s,">>",off),
+            Insn::UshrInt2Addr(d,s) => self.binop2addr(*d,*s,">>>",off),
 
             Insn::AddIntLit16(d,s,l) => self.binop_lit(*d,*s,*l as i64,"+",off),
             Insn::MulIntLit16(d,s,l) => self.binop_lit(*d,*s,*l as i64,"*",off),
@@ -762,6 +765,7 @@ impl<'a> LiftCtx<'a> {
                 "-" => Some(JsExpr::Int(n - lit)),
                 "*" => Some(JsExpr::Int(n * lit)),
                 "/" if lit != 0 => Some(JsExpr::Int(n / lit)),
+                "%" if lit != 0 => Some(JsExpr::Int(n % lit)),
                 _ => None,
             }
         } else { None };

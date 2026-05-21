@@ -2,7 +2,6 @@ use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr,
 use crate::extensions::apk_translator::translator::emit::render::expr_to_js;
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
-    let stmts = elide_redundant_assigns(stmts);
     let stmts = simplify_array_add(stmts);
     let stmts = simplify_first_instance(stmts);
     let stmts = simplify_foreach(stmts);
@@ -22,40 +21,65 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut i = 0;
 
     while i < stmts.len() {
-        if i + 2 < stmts.len() {
+        if i + 3 < stmts.len() {
             if let (
                 JsStmt::While { cond, body },
-                JsStmt::Assign { reg: result_reg, .. },
-                JsStmt::Expr(JsExpr::Raw(s)),
+                JsStmt::Assign { reg: str_reg, expr: JsExpr::Str(s) },
+                JsStmt::Assign { reg: result_reg, expr: JsExpr::MethodCall { method, args, .. } },
             ) = (&stmts[i], &stmts[i + 1], &stmts[i + 2])
             {
-                if s.starts_with("throw ") {
-                    if let Some((_inst_reg, class_name)) = try_rewrite_first_instance(body) {
-                        let iter_reg = extract_iter_reg(cond);
-                        let result_reg = *result_reg;
-                        let expr = format!(
+                if let Some((inst_reg, class_name)) = try_rewrite_first_instance(body) {
+                    let iter_reg = extract_iter_reg(cond);
+                    let result_reg = *result_reg;
+                    let str_reg = *str_reg;
+                    let s = s.clone();
+                    let inst_reg = inst_reg;
+                    let method = method.clone();
+                    let args = args.clone();
+
+                    // firstInstance result → inst_reg
+                    out.push(JsStmt::Assign {
+                        reg: inst_reg,
+                        expr: JsExpr::Raw(format!(
                             "firstInstance(v{}, (v{}) => v{} instanceof {})",
                             iter_reg, iter_reg, iter_reg, class_name,
-                        );
-                        out.push(JsStmt::Assign {
-                            reg: result_reg,
-                            expr: JsExpr::Raw(expr),
-                        });
-                        i += 3;
-                        continue;
-                    }
+                        )),
+                    });
+
+                    // preserve the string assign unchanged
+                    out.push(JsStmt::Assign {
+                        reg: str_reg,
+                        expr: JsExpr::Str(s),
+                    });
+
+                    // fix the method call receiver: Reg(6) → inst_reg
+                    out.push(JsStmt::Assign {
+                        reg: result_reg,
+                        expr: JsExpr::MethodCall {
+                            receiver: Box::new(JsExpr::Reg(inst_reg)),
+                            method,
+                            args,
+                            is_static: false,
+                        },
+                    });
+
+                    i += 3;
+                    continue;
                 }
             }
         }
 
+        // 1-statement pattern: bare while with no following assign/throw
         if let JsStmt::While { cond, body } = &stmts[i] {
-            if let Some((_inst_reg, class_name)) = try_rewrite_first_instance(body) {
+            if let Some((inst_reg, class_name)) = try_rewrite_first_instance(body) {
                 let iter_reg = extract_iter_reg(cond);
-                let expr = format!(
-                    "firstInstance(v{}, (v{}) => v{} instanceof {})",
-                    iter_reg, iter_reg, iter_reg, class_name
-                );
-                out.push(JsStmt::Expr(JsExpr::Raw(expr)));
+                out.push(JsStmt::Assign {
+                    reg: inst_reg,
+                    expr: JsExpr::Raw(format!(
+                        "firstInstance(v{}, (v{}) => v{} instanceof {})",
+                        iter_reg, iter_reg, iter_reg, class_name,
+                    )),
+                });
                 i += 1;
                 continue;
             }
