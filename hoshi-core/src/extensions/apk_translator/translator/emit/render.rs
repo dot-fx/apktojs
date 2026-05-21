@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use crate::extensions::apk_translator::{ApkMeta, WalkedSource};
 use crate::extensions::apk_translator::translator::dalvik::interpreter;
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
 use crate::extensions::apk_translator::translator::resolver::resolve::TypeNames;
 
@@ -12,7 +12,7 @@ pub struct JsMethod {
     pub is_static: bool,
 }
 
-fn hoist_super(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
+fn hoist_super(stmts: Vec<JsStmt>, has_super: bool, names: &TypeNames, pool: &Pool) -> Vec<JsStmt> {
     let super_pos = stmts.iter().position(|s| {
         matches!(s, JsStmt::Expr(JsExpr::SuperCall { .. }))
     });
@@ -21,55 +21,57 @@ fn hoist_super(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
         return stmts;
     };
 
-    let mut before: Vec<JsStmt> = vec![];
-    let mut deferred: Vec<JsStmt> = vec![];
+    let mut result = vec![];
+    let mut deferred = vec![];
+    let mut tmp_counter = 0;
 
     for stmt in stmts[..super_pos].iter().cloned() {
-        match &stmt {
-            JsStmt::FieldSet { receiver: JsExpr::This, .. } => deferred.push(stmt),
-            _ => before.push(stmt),
+        match stmt {
+            JsStmt::FieldSet { receiver: JsExpr::This, field, value } => {
+                let tmp_name = format!("__super_tmp_{}_{}", field, tmp_counter);
+                tmp_counter += 1;
+
+                // Evaluate expression exactly where it belongs sequentially
+                let rendered_expr = expr_to_js(&value, has_super, names, pool);
+                result.push(JsStmt::Expr(JsExpr::Raw(format!("let {} = {}", tmp_name, rendered_expr))));
+
+                let field_name = {
+                    let has_conflict = pool.type_info.values().any(|t| t.methods.iter().any(|m| m == &field));
+                    if has_conflict { format!("{}_val", field) } else { field.clone() }
+                };
+                let this_prop = js_prop("this", &field_name);
+                deferred.push(JsStmt::Expr(JsExpr::Raw(format!("{} = {}", this_prop, tmp_name))));
+            }
+            other => {
+                result.push(other); // Keep everything else exactly in place
+            }
         }
     }
 
-    let mut result = before;
     result.push(stmts[super_pos].clone());  // super(...)
-    result.extend(deferred);                // this.x = ... now safe
+    result.extend(deferred);                // Safe to assign properties now
     result.extend(stmts[super_pos + 1..].iter().cloned());
     result
 }
 
 pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_super: bool, names: &TypeNames, pool: &Pool) -> String {
     let stmts = strip_dead_code(stmts);
-    let stmts = hoist_super(stmts);
-
-    let mut all_regs: Vec<u8> = {
-        let mut set = HashSet::new();
-        collect_assigned_regs(&stmts, &mut set);
-        collect_read_regs(&stmts, &mut set);
-        let mut v: Vec<u8> = set.into_iter().collect();
-        v.sort();
-        v
-    };
+    let stmts = hoist_super(stmts, has_super, names, pool);
 
     let mut lines = Vec::new();
 
-    if !all_regs.is_empty() {
-        let pad = " ".repeat(indent);
-        let decls = all_regs.iter().map(|r| format!("v{}", r)).collect::<Vec<_>>().join(", ");
-        lines.push(format!("{}let {};", pad, decls));
-    }
+    let mut declared: HashSet<RegId> = HashSet::new();
 
-    let mut declared: HashSet<u8> = all_regs.into_iter().collect(); // all pre-declared
     render_stmts(&stmts, indent, &mut declared, &mut lines, has_super, names, pool);
 
     lines.join("\n")
 }
 
-fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
+fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<RegId>) {
     for stmt in stmts {
         match stmt {
-            JsStmt::Assign { reg, .. } => { out.insert(*reg); }
-            JsStmt::StaticGet { dst, .. } => { out.insert(*dst); }
+            JsStmt::Assign { reg, .. } => { out.insert(reg.clone()); }
+            JsStmt::StaticGet { dst, .. } => { out.insert(dst.clone()); }
             JsStmt::If { then_body, else_body, .. } => {
                 collect_assigned_regs(then_body, out);
                 collect_assigned_regs(else_body, out);
@@ -151,6 +153,8 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
             JsStmt::Return(_) | JsStmt::Break | JsStmt::Continue
         ) || matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"))
             || matches!(stmt, JsStmt::Expr(JsExpr::StaticCall { method, .. }) if method == "throw")
+            || matches!(stmt, JsStmt::Throw)
+            || matches!(stmt, JsStmt::Expr(JsExpr::UnaryOp { op, .. }) if *op == "throw ")
             || matches!(stmt, JsStmt::Throw);
 
         let stmt = match stmt {
@@ -199,7 +203,7 @@ fn simplify_cond(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool)
 fn render_stmts(
     stmts:    &[JsStmt],
     indent:   usize,
-    declared: &mut HashSet<u8>,
+    declared: &mut HashSet<RegId>,
     lines:    &mut Vec<String>,
     has_super: bool,
     names: &TypeNames,
@@ -210,22 +214,18 @@ fn render_stmts(
     for stmt in stmts {
         match stmt {
             JsStmt::Assign { reg, expr } => {
+                let prefix = if declared.insert(reg.clone()) { "var " } else { "" };
                 lines.push(format!(
-                    "{}v{} = {};",
+                    "{}{}v{}_{} = {};",
                     pad,
-                    reg,
+                    prefix,
+                    reg.reg,
+                    reg.version,
                     expr_to_js(expr, has_super, names, pool)
                 ));
             }
 
-            JsStmt::Param { name, .. } => {
-            }
-
             JsStmt::StaticGet { class, field, dst } => {
-                let has_conflict = pool.type_info.get(class)
-                    .map(|t| t.methods.iter().any(|m| m == field))
-                    .unwrap_or(false);
-                eprintln!("[StaticGet] class='{}' field='{}' conflict={}", class, field, has_conflict);
                 let resolved_class = names.resolve(class);
                 let field_name = if pool.type_info.get(class)
                     .map(|t| t.methods.iter().any(|m| m == field))
@@ -236,7 +236,24 @@ fn render_stmts(
                     field.clone()
                 };
 
-                lines.push(format!("{}v{} = {}.{};", pad, dst, resolved_class, field_name));
+                let prefix = if declared.insert(dst.clone()) {
+                    "var "
+                } else {
+                    ""
+                };
+
+                lines.push(format!(
+                    "{}{}v{}_{} = {}.{};",
+                    pad,
+                    prefix,
+                    dst.reg,
+                    dst.version,
+                    resolved_class,
+                    field_name
+                ));
+            }
+
+            JsStmt::Param { name, .. } => {
             }
 
             JsStmt::StaticSet { class, field, value } => {
@@ -654,7 +671,7 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
             format!("{}.{}", resolved, field_name)
         }
         JsExpr::Str(s) => format!("\"{}\"", escape_js_string(s)),
-        JsExpr::Reg(r)      => format!("v{}", r),
+        JsExpr::Reg(r) => format!("v{}_{}", r.reg, r.version),
         JsExpr::This        => "this".into(),
         JsExpr::Raw(s)      => s.clone(),
 
@@ -823,7 +840,7 @@ fn topo_sort_classes(
     out
 }
 
-fn collect_read_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
+fn collect_read_regs(stmts: &[JsStmt], out: &mut HashSet<RegId>) {
     for stmt in stmts {
         match stmt {
             JsStmt::Assign { expr, .. } => collect_read_regs_expr(expr, out),
@@ -856,9 +873,9 @@ fn collect_read_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
     }
 }
 
-fn collect_read_regs_expr(expr: &JsExpr, out: &mut HashSet<u8>) {
+fn collect_read_regs_expr(expr: &JsExpr, out: &mut HashSet<RegId>) {
     match expr {
-        JsExpr::Reg(r) => { out.insert(*r); }
+        JsExpr::Reg(r) => { out.insert(r.clone()); }
         JsExpr::MethodCall { receiver, args, .. } => {
             collect_read_regs_expr(receiver, out);
             for a in args { collect_read_regs_expr(a, out); }

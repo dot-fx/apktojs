@@ -4,7 +4,7 @@ mod helpers;
 use std::collections::HashMap;
 use candidates::CANDIDATES;
 use helpers::{is_resolved_method, obfuscated_call_key};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
 use crate::extensions::apk_translator::translator::resolver::infer::candidates::score_candidate;
 use crate::extensions::apk_translator::translator::resolver::infer::helpers::parse_meth_token;
 use crate::extensions::apk_translator::translator::resolver::pool::Pool;
@@ -90,7 +90,7 @@ impl InferCtx {
     }
 
     pub fn scan_stmts(&mut self, stmts: &[JsStmt], pool: &Pool, shard: usize) {
-        let mut reg_calls: HashMap<u8, JsExpr> = HashMap::new();
+        let mut reg_calls: HashMap<RegId, JsExpr> = HashMap::new();
 
         for stmt in stmts {
             match stmt {
@@ -99,7 +99,7 @@ impl InferCtx {
                     self.scan_resolved_expr(&resolved, pool, shard, &reg_calls);
 
                     if matches!(resolved, JsExpr::MethodCall { .. }) {
-                        reg_calls.insert(*reg, resolved);
+                        reg_calls.insert(reg.clone(), resolved);
                     } else {
                         reg_calls.remove(reg);
                     }
@@ -179,7 +179,11 @@ impl InferCtx {
         self.scan_stringbuilder_appends(stmts, pool, shard, &reg_calls);
     }
 
-    fn resolve_expr<'a>(&self, expr: &'a JsExpr, reg_calls: &'a HashMap<u8, JsExpr>) -> JsExpr {
+    fn resolve_expr<'a>(
+        &self,
+        expr: &'a JsExpr,
+        reg_calls: &'a HashMap<RegId, JsExpr>,
+    ) -> JsExpr {
         match expr {
             JsExpr::Reg(r) => reg_calls.get(r).cloned().unwrap_or_else(|| expr.clone()),
             _ => expr.clone(),
@@ -190,7 +194,7 @@ impl InferCtx {
         obfuscated_call_key(expr, pool, shard).map(|(key, _)| key)
     }
 
-    fn check_null_pattern(&mut self, cond: &JsExpr, pool: &Pool, shard: usize, reg_calls: &HashMap<u8, JsExpr>) {
+    fn check_null_pattern(&mut self, cond: &JsExpr, pool: &Pool, shard: usize, reg_calls: &HashMap<RegId, JsExpr>) {
         match cond {
             JsExpr::UnaryOp { op: "!", expr } => {
                 let inner = self.resolve_expr(expr, reg_calls);
@@ -212,7 +216,7 @@ impl InferCtx {
         }
     }
 
-    fn scan_resolved_expr(&mut self, expr: &JsExpr, pool: &Pool, shard: usize, reg_calls: &HashMap<u8, JsExpr>) {
+    fn scan_resolved_expr(&mut self, expr: &JsExpr, pool: &Pool, shard: usize, reg_calls: &HashMap<RegId, JsExpr>) {
         match expr {
             JsExpr::MethodCall { receiver, method, args, .. } => {
                 let real_method = if let Some((token_shard, idx)) = parse_meth_token(method) {
@@ -385,7 +389,7 @@ impl InferCtx {
         stmts: &[JsStmt],
         pool: &Pool,
         shard: usize,
-        reg_calls: &HashMap<u8, JsExpr>,
+        reg_calls: &HashMap<RegId, JsExpr>,
     ) {
         let mut local_regs = reg_calls.clone();
         let mut seq: Vec<JsExpr> = Vec::new();
@@ -395,8 +399,8 @@ impl InferCtx {
                 JsStmt::Assign { reg, expr } => {
                     let resolved = self.resolve_expr(expr, &local_regs);
                     match &resolved {
-                        JsExpr::MethodCall { .. } => { local_regs.insert(*reg, resolved); }
-                        JsExpr::Str(_)            => { local_regs.insert(*reg, resolved); }
+                        JsExpr::MethodCall { .. } => { local_regs.insert(reg.clone(), resolved); }
+                        JsExpr::Str(_)            => { local_regs.insert(reg.clone(), resolved); }
                         _                         => { local_regs.remove(reg); }
                     }
                 }

@@ -1,5 +1,4 @@
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt};
-use crate::extensions::apk_translator::translator::emit::render::expr_to_js;
+use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = simplify_array_add(stmts);
@@ -30,19 +29,24 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
             {
                 if let Some((inst_reg, class_name)) = try_rewrite_first_instance(body) {
                     let iter_reg = extract_iter_reg(cond);
-                    let result_reg = *result_reg;
-                    let str_reg = *str_reg;
+                    let result_reg = result_reg.clone();
+                    let str_reg = str_reg.clone();
                     let s = s.clone();
-                    let inst_reg = inst_reg;
                     let method = method.clone();
                     let args = args.clone();
 
                     // firstInstance result → inst_reg
                     out.push(JsStmt::Assign {
-                        reg: inst_reg,
+                        reg: inst_reg.clone(),
                         expr: JsExpr::Raw(format!(
-                            "firstInstance(v{}, (v{}) => v{} instanceof {})",
-                            iter_reg, iter_reg, iter_reg, class_name,
+                            "firstInstance(v{}_{} , (v{}_{} ) => v{}_{} instanceof {})",
+                            iter_reg.reg,
+                            iter_reg.version,
+                            iter_reg.reg,
+                            iter_reg.version,
+                            iter_reg.reg,
+                            iter_reg.version,
+                            class_name,
                         )),
                     });
 
@@ -76,8 +80,14 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
                 out.push(JsStmt::Assign {
                     reg: inst_reg,
                     expr: JsExpr::Raw(format!(
-                        "firstInstance(v{}, (v{}) => v{} instanceof {})",
-                        iter_reg, iter_reg, iter_reg, class_name,
+                        "firstInstance(v{}_{} , (v{}_{} ) => v{}_{} instanceof {})",
+                        iter_reg.reg,
+                        iter_reg.version,
+                        iter_reg.reg,
+                        iter_reg.version,
+                        iter_reg.reg,
+                        iter_reg.version,
+                        class_name,
                     )),
                 });
                 i += 1;
@@ -92,14 +102,14 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     out
 }
 
-fn extract_iter_reg(cond: &JsExpr) -> u8 {
+fn extract_iter_reg(cond: &JsExpr) -> RegId {
     match cond {
         JsExpr::MethodCall { receiver, .. } => match receiver.as_ref() {
-            JsExpr::Reg(r) => *r,
-            _ => 5,
+            JsExpr::Reg(id) => id.clone(),
+            _ => RegId { reg: 5, version: 0 },
         },
-        JsExpr::Reg(r) => *r,
-        _ => 5,
+        JsExpr::Reg(id) => id.clone(),
+        _ => RegId { reg: 5, version: 0 },
     }
 }
 
@@ -129,15 +139,15 @@ fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
     }
 }
 
-fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(u8, String)> {
-    let mut instanceof_reg: Option<u8> = None;
+fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(RegId, String)> {
+    let mut instanceof_reg: Option<RegId> = None;
     let mut class_name: Option<String> = None;
 
     for stmt in body {
         match stmt {
             JsStmt::Assign { reg, expr: JsExpr::Raw(s) } if s.contains("instanceof") => {
                 if let Some(cls) = s.split("instanceof").nth(1) {
-                    instanceof_reg = Some(*reg);
+                    instanceof_reg = Some(reg.clone());
                     class_name = Some(
                         cls.trim()
                             .trim_end_matches(|c| c == ')' || c == ';')
@@ -186,7 +196,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
             reg,
             expr: JsExpr::MethodCall { receiver, method, args, .. },
         } if args.is_empty() && method != "iterator" => {
-            (*reg, format!("{}.{}()", expr_to_str(receiver), method))
+            (reg.clone(), format!("{}.{}()", expr_to_str(receiver), method))
         }
         _ => return None,
     };
@@ -198,7 +208,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
         } if *reg == list_reg
             && method == "iterator"
             && args.is_empty()
-            && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) => {}
+            && matches!(receiver.as_ref(), JsExpr::Reg(id) if id == &list_reg) => {}
         _ => return None,
     }
 
@@ -208,7 +218,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
                 JsExpr::MethodCall { receiver, method, args, .. }
                 if method == "hasNext"
                     && args.is_empty()
-                    && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) => {}
+                    && matches!(receiver.as_ref(), JsExpr::Reg(id) if id == &list_reg) => {}
                 _ => return None,
             }
 
@@ -222,9 +232,9 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
                     expr: JsExpr::MethodCall { receiver, method, args, .. },
                 } if method == "next"
                     && args.is_empty()
-                    && matches!(receiver.as_ref(), JsExpr::Reg(r) if *r == list_reg) =>
+                    && matches!(receiver.as_ref(), JsExpr::Reg(id) if id == &list_reg) =>
                     {
-                        *reg
+                        reg.clone()
                     }
                 _ => return None,
             };
@@ -246,12 +256,18 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
         format!("{{ {} }}", stmts_rendered.join("; "))
     };
 
-    Some(format!("{}.forEach(v{} => {})", list_expr, item_reg, body_str))
+    Some(format!(
+        "{}.forEach(v{}_{} => {})",
+        list_expr,
+        item_reg.reg,
+        item_reg.version,
+        body_str
+    ))
 }
 
 fn expr_to_str(expr: &JsExpr) -> String {
     match expr {
-        JsExpr::Reg(r) => format!("v{}", r),
+        JsExpr::Reg(id) => format!("v{}_{}", id.reg, id.version),
         JsExpr::MethodCall { receiver, method, args, .. } => {
             let r = expr_to_str(receiver);
             let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
@@ -269,7 +285,7 @@ fn expr_to_str(expr: &JsExpr) -> String {
 fn stmt_to_str(stmt: &JsStmt) -> Option<String> {
     match stmt {
         JsStmt::Expr(e) => Some(expr_to_str(e)),
-        JsStmt::Assign { reg, expr } => Some(format!("v{} = {}", reg, expr_to_str(expr))),
+        JsStmt::Assign { reg, expr } => Some(format!("v{}_{} = {}", reg.reg, reg.version, expr_to_str(expr))),
         JsStmt::FieldSet { receiver, field, value } => Some(format!(
             "{}.{} = {}",
             expr_to_str(receiver), field, expr_to_str(value)

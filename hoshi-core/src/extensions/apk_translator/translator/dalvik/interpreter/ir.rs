@@ -1,3 +1,9 @@
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RegId {
+    pub reg: u8,
+    pub version: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsExpr {
     Null,
@@ -5,7 +11,7 @@ pub enum JsExpr {
     Int(i64),
     Float(f64),
     Str(String),
-    Reg(u8),
+    Reg(RegId),
     This,
 
     MethodCall {
@@ -73,7 +79,10 @@ pub enum JsExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsStmt {
     Param { reg: u8, name: String },
-    Assign   { reg: u8, expr: JsExpr },
+    Assign {
+        reg: RegId,
+        expr: JsExpr,
+    },
     FieldSet { receiver: JsExpr, field: String, value: JsExpr },
     ArraySet { arr: JsExpr, idx: JsExpr, value: JsExpr },
     Expr(JsExpr),
@@ -99,7 +108,7 @@ pub enum JsStmt {
     CondGoto { cond: JsExpr, target: i32 },
     Goto(i32),
     StaticSet { class: String, field: String, value: JsExpr },
-    StaticGet { class: String, field: String, dst: u8 },
+    StaticGet { class: String, field: String, dst: RegId },
     Throw,
 }
 

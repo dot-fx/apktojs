@@ -459,7 +459,7 @@ fn cond_regs_written_in_body(cond: &JsExpr, body: &[JsStmt]) -> bool {
 
 fn collect_expr_regs(expr: &JsExpr, out: &mut HashSet<u8>) {
     match expr {
-        JsExpr::Reg(r) => { out.insert(*r); }
+        JsExpr::Reg(id) => { out.insert(id.reg); }
         JsExpr::BinOp { left, right, .. } => {
             collect_expr_regs(left, out);
             collect_expr_regs(right, out);
@@ -476,7 +476,7 @@ fn collect_expr_regs(expr: &JsExpr, out: &mut HashSet<u8>) {
 fn body_writes_any_reg(stmts: &[JsStmt], regs: &HashSet<u8>) -> bool {
     for stmt in stmts {
         match stmt {
-            JsStmt::Assign { reg, .. } if regs.contains(reg) => return true,
+            JsStmt::Assign { reg, .. } if regs.contains(&reg.reg) => return true,
             JsStmt::If { then_body, else_body, .. } => {
                 if body_writes_any_reg(then_body, regs)
                     || body_writes_any_reg(else_body, regs) {
@@ -496,8 +496,8 @@ fn body_writes_any_reg(stmts: &[JsStmt], regs: &HashSet<u8>) -> bool {
 // Add this helper function above resolve_loop_condition
 fn substitute_reg(expr: &mut JsExpr, target: u8, replacement: &JsExpr) {
     match expr {
-        JsExpr::Reg(r) => {
-            if *r == target {
+        JsExpr::Reg(id) => {
+            if id.reg == target {
                 *expr = replacement.clone();
             }
         }
@@ -542,7 +542,7 @@ fn resolve_loop_condition(
     // 2. Search header block itself
     for (i, stmt) in block.stmts.iter().enumerate().rev() {
         if let JsStmt::Assign { reg, expr } = stmt {
-            if *reg == r {
+            if reg.reg == r {
                 substitute_reg(&mut cond, r, expr);
                 return (cond, Some(i), None);
             }
@@ -557,7 +557,7 @@ fn resolve_loop_condition(
         if pred.offset >= block.offset { continue; }
         for (_, stmt) in pred.stmts.iter().enumerate().rev() {
             if let JsStmt::Assign { reg, expr } = stmt {
-                if *reg == r {
+                if reg.reg == r {
                     substitute_reg(&mut cond, r, expr);
                     return (cond, None, Some(pred.offset));
                 }
