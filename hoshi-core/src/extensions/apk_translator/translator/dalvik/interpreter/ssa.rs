@@ -1,37 +1,61 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
 use crate::extensions::apk_translator::translator::dalvik::interpreter::ir::RegId;
 
-/// Linear SSA renaming pass.
-///
-/// Walks the flat `Vec<TaggedStmt>` produced by the lifter (before reloop),
-/// and rewrites every `RegId` so that each write to a register gets a fresh
-/// version number and all subsequent reads use that version — eliminating the
-/// "same `var` name reused" problem that breaks JS output.
-///
-/// Parameters are seeded at version 0 by the lifter and are left alone;
-/// any write inside the method body starts at version 1.
 pub fn rename(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut current: HashMap<u8, usize> = HashMap::new();
     let mut next: HashMap<u8, usize> = HashMap::new();
+    let locked: HashSet<u8> = HashSet::new();
 
-    // Directly process the blocks using your existing recursive logic
-    rename_block(stmts, &mut current, &mut next)
+    rename_block(stmts, &mut current, &mut next, &locked)
 }
 
-// ---------------------------------------------------------------------------
-// Statement renaming
-// ---------------------------------------------------------------------------
+fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
+    for stmt in stmts {
+        match stmt {
+            JsStmt::Assign { reg, .. } => { out.insert(reg.reg); }
+            JsStmt::If { then_body, else_body, .. } => {
+                collect_assigned_regs(then_body, out);
+                collect_assigned_regs(else_body, out);
+            }
+            JsStmt::Loop { body } | JsStmt::While { body, .. } | JsStmt::DoWhile { body, .. } => {
+                collect_assigned_regs(body, out);
+            }
+            JsStmt::Switch { cases, default, .. } => {
+                for (_, body) in cases { collect_assigned_regs(body, out); }
+                if let Some(body) = default { collect_assigned_regs(body, out); }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pre_declare_regs(
+    stmts: &[JsStmt],
+    current: &mut HashMap<u8, usize>,
+    next: &mut HashMap<u8, usize>,
+) {
+    let mut assigned = HashSet::new();
+    collect_assigned_regs(stmts, &mut assigned);
+    for r in assigned {
+        if !current.contains_key(&r) {
+            let ver = *next.entry(r).or_insert(1);
+            current.insert(r, ver);
+            next.insert(r, ver + 1);
+        }
+    }
+}
 
 fn rename_stmt(
     stmt: JsStmt,
     current: &mut HashMap<u8, usize>,
     next: &mut HashMap<u8, usize>,
+    locked: &HashSet<u8>,
 ) -> JsStmt {
     match stmt {
         JsStmt::Assign { reg, expr } => {
             let expr = rename_expr(expr, current);
-            let new_ver = bump(reg.reg, current, next);
+            let new_ver = bump(reg.reg, current, next, locked);
             JsStmt::Assign {
                 reg: RegId { reg: reg.reg, version: new_ver },
                 expr,
@@ -76,75 +100,69 @@ fn rename_stmt(
         JsStmt::If { cond, then_body, else_body } => {
             let cond = rename_expr(cond, current);
 
-            let mut then_current = current.clone();
-            let mut then_next = next.clone();
-            let then_body = rename_block(then_body, &mut then_current, &mut then_next);
+            pre_declare_regs(&then_body, current, next);
+            pre_declare_regs(&else_body, current, next);
 
-            let mut else_current = current.clone();
-            let mut else_next = next.clone();
-            let else_body = rename_block(else_body, &mut else_current, &mut else_next);
+            let mut inner_locked = locked.clone();
+            for &r in current.keys() { inner_locked.insert(r); }
 
-            // Only merge state back if the branch actually survives to rejoin the main trunk
-            if !is_terminal(&then_body) {
-                for (r, v) in then_next { let e = next.entry(r).or_insert(0); if v > *e { *e = v; } }
-                for (r, v) in then_current { let e = current.entry(r).or_insert(0); if v > *e { *e = v; } }
-            }
-            if !is_terminal(&else_body) {
-                for (r, v) in else_next { let e = next.entry(r).or_insert(0); if v > *e { *e = v; } }
-                for (r, v) in else_current { let e = current.entry(r).or_insert(0); if v > *e { *e = v; } }
-            }
+            let mut then_curr = current.clone(); let mut then_next = next.clone();
+            let then_body = rename_block(then_body, &mut then_curr, &mut then_next, &inner_locked);
+
+            let mut else_curr = current.clone(); let mut else_next = next.clone();
+            let else_body = rename_block(else_body, &mut else_curr, &mut else_next, &inner_locked);
 
             JsStmt::If { cond, then_body, else_body }
         }
 
-        JsStmt::Loop { body } =>
-            JsStmt::Loop { body: rename_block(body, current, next) },
+        JsStmt::Loop { body } => {
+            pre_declare_regs(&body, current, next);
+            let mut inner_locked = locked.clone();
+            for &r in current.keys() { inner_locked.insert(r); }
+            JsStmt::Loop { body: rename_block(body, current, next, &inner_locked) }
+        }
 
-        JsStmt::While { cond, body } => JsStmt::While {
-            cond: rename_expr(cond, current),
-            body: rename_block(body, current, next),
-        },
+        JsStmt::While { cond, body } => {
+            let cond = rename_expr(cond, current);
+            pre_declare_regs(&body, current, next);
+
+            let mut inner_locked = locked.clone();
+            for &r in current.keys() { inner_locked.insert(r); }
+
+            JsStmt::While {
+                cond,
+                body: rename_block(body, current, next, &inner_locked),
+            }
+        }
 
         JsStmt::DoWhile { body, cond } => {
-            let body = rename_block(body, current, next);
+            pre_declare_regs(&body, current, next);
+            let mut inner_locked = locked.clone();
+            for &r in current.keys() { inner_locked.insert(r); }
+
+            let body = rename_block(body, current, next, &inner_locked);
             let cond = rename_expr(cond, current);
             JsStmt::DoWhile { body, cond }
         }
 
         JsStmt::Switch { expr, cases, default } => {
             let expr = rename_expr(expr, current);
-            let mut merged_current = current.clone();
-            let mut merged_next = next.clone();
 
-            let cases = cases
-                .into_iter()
-                .map(|(key, body)| {
-                    let mut c_curr = current.clone();
-                    let mut c_next = next.clone();
-                    let body = rename_block(body, &mut c_curr, &mut c_next);
+            for (_, body) in &cases { pre_declare_regs(body, current, next); }
+            if let Some(body) = &default { pre_declare_regs(body, current, next); }
 
-                    if !is_terminal(&body) {
-                        for (r, v) in c_next { let e = merged_next.entry(r).or_insert(0); if v > *e { *e = v; } }
-                        for (r, v) in c_curr { let e = merged_current.entry(r).or_insert(0); if v > *e { *e = v; } }
-                    }
-                    (key, body)
-                })
-                .collect();
+            let mut inner_locked = locked.clone();
+            for &r in current.keys() { inner_locked.insert(r); }
+
+            let cases = cases.into_iter().map(|(key, body)| {
+                let mut c_curr = current.clone(); let mut c_next = next.clone();
+                (key, rename_block(body, &mut c_curr, &mut c_next, &inner_locked))
+            }).collect();
 
             let default = default.map(|body| {
-                let mut c_curr = current.clone();
-                let mut c_next = next.clone();
-                let body = rename_block(body, &mut c_curr, &mut c_next);
-
-                if !is_terminal(&body) {
-                    for (r, v) in c_next { let e = merged_next.entry(r).or_insert(0); if v > *e { *e = v; } }
-                    for (r, v) in c_curr { let e = merged_current.entry(r).or_insert(0); if v > *e { *e = v; } }
-                }
-                body
+                let mut c_curr = current.clone(); let mut c_next = next.clone();
+                rename_block(body, &mut c_curr, &mut c_next, &inner_locked)
             });
-
-            *current = merged_current;
-            *next = merged_next;
 
             JsStmt::Switch { expr, cases, default }
         }
@@ -157,20 +175,16 @@ fn rename_block(
     stmts: Vec<JsStmt>,
     current: &mut HashMap<u8, usize>,
     next: &mut HashMap<u8, usize>,
+    locked: &HashSet<u8>,
 ) -> Vec<JsStmt> {
     stmts
         .into_iter()
-        .map(|s| rename_stmt(s, current, next))
+        .map(|s| rename_stmt(s, current, next, locked))
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Expression renaming
-// ---------------------------------------------------------------------------
-
 fn rename_expr(expr: JsExpr, current: &mut HashMap<u8, usize>) -> JsExpr {
     match expr {
-        // A read: rewrite to whatever version is current for this register.
         JsExpr::Reg(id) => {
             let ver = *current.entry(id.reg).or_insert(0);
             JsExpr::Reg(RegId { reg: id.reg, version: ver })
@@ -237,7 +251,6 @@ fn rename_expr(expr: JsExpr, current: &mut HashMap<u8, usize>) -> JsExpr {
         JsExpr::StringConcat(exprs) =>
             JsExpr::StringConcat(rename_exprs(exprs, current)),
 
-        // Leaves — no registers inside.
         other => other,
     }
 }
@@ -246,22 +259,14 @@ fn rename_exprs(exprs: Vec<JsExpr>, current: &mut HashMap<u8, usize>) -> Vec<JsE
     exprs.into_iter().map(|e| rename_expr(e, current)).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Version bookkeeping
-// ---------------------------------------------------------------------------
 
-/// Bump register `r` to its next write version, update `current`, return it.
-fn bump(r: u8, current: &mut HashMap<u8, usize>, next: &mut HashMap<u8, usize>) -> usize {
+fn bump(r: u8, current: &mut HashMap<u8, usize>, next: &mut HashMap<u8, usize>, locked: &HashSet<u8>) -> usize {
+    if locked.contains(&r) {
+        return *current.get(&r).unwrap();
+    }
+
     let ver = *next.entry(r).or_insert(1);
     current.insert(r, ver);
     next.insert(r, ver + 1);
     ver
-}
-
-fn is_terminal(stmts: &[JsStmt]) -> bool {
-    stmts.iter().any(|stmt| {
-        matches!(stmt, JsStmt::Return(_) | JsStmt::Throw | JsStmt::Goto(_)) ||
-            matches!(stmt, JsStmt::Expr(JsExpr::UnaryOp { op, .. }) if *op == "throw ") ||
-            matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"))
-    })
 }

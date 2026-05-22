@@ -124,13 +124,9 @@ fn resolve_lambdas(js: &str, pool: &Pool) -> String {
         }
 
         format!(
-            "((...args) => {}.invoke({}))",
+            "((...args) => new {}({}).invoke(...args))",
             ty,
-            if args.trim().is_empty() {
-                "...args".to_string()
-            } else {
-                format!("{}, ...args", args)
-            }
+            args
         )
     }).into_owned()
 }

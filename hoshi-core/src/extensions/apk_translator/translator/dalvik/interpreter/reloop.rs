@@ -24,18 +24,50 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
     let blocks = cfg::build_blocks(body_tagged);
     if blocks.is_empty() { return out; }
 
+
+    let b2i: HashMap<i32, usize> = blocks.iter().enumerate()
+        .map(|(i, b)| (b.offset, i))
+        .collect();
+
     let loop_headers: HashSet<i32> = {
         let mut h = HashSet::new();
-        for b in &blocks {
-            for t in cfg::block_successors(b) {
-                if t <= b.offset { h.insert(t); }
+        let mut visiting = HashSet::new();
+        let mut visited = HashSet::new();
+
+        fn dfs(
+            u_idx: usize,
+            blocks: &[BasicBlock],
+            b2i: &HashMap<i32, usize>,
+            visiting: &mut HashSet<usize>,
+            visited: &mut HashSet<usize>,
+            h: &mut HashSet<i32>
+        ) {
+            visiting.insert(u_idx);
+
+            for t in cfg::block_successors(&blocks[u_idx]) {
+                if let Some(&v_idx) = b2i.get(&t) {
+                    if visiting.contains(&v_idx) {
+                        // True back-edge: target is currently on the recursion stack!
+                        h.insert(t);
+                    } else if !visited.contains(&v_idx) {
+                        dfs(v_idx, blocks, b2i, visiting, visited, h);
+                    }
+                }
+            }
+
+            visiting.remove(&u_idx);
+            visited.insert(u_idx);
+        }
+
+        if !blocks.is_empty() {
+            for i in 0..blocks.len() {
+                if !visited.contains(&i) {
+                    dfs(i, &blocks, &b2i, &mut visiting, &mut visited, &mut h);
+                }
             }
         }
         h
     };
-    let b2i: HashMap<i32, usize> = blocks.iter().enumerate()
-        .map(|(i, b)| (b.offset, i))
-        .collect();
 
     let preds = cfg::build_predecessors(&blocks, &b2i);
 
@@ -98,7 +130,7 @@ fn reloop(
                 match block_is_loop_guard(block, loop_end) {
                     Some(c) => {
                         let (cond, stmt, pred_off) =
-                            resolve_loop_condition(block, c, blocks, b2i, preds);
+                            resolve_loop_condition(block, c);
                         (Some(cond), stmt, pred_off)
                     }
                     None => (None, None, None),
@@ -493,7 +525,6 @@ fn body_writes_any_reg(stmts: &[JsStmt], regs: &HashSet<u8>) -> bool {
     false
 }
 
-// Add this helper function above resolve_loop_condition
 fn substitute_reg(expr: &mut JsExpr, target: u8, replacement: &JsExpr) {
     match expr {
         JsExpr::Reg(id) => {
@@ -518,18 +549,12 @@ fn substitute_reg(expr: &mut JsExpr, target: u8, replacement: &JsExpr) {
     }
 }
 
-// Replace your existing resolve_loop_condition with this updated version
 fn resolve_loop_condition(
     block: &BasicBlock,
     cond: JsExpr,
-    blocks: &[BasicBlock],
-    b2i: &HashMap<i32, usize>,
-    preds: &[Vec<usize>],
 ) -> (JsExpr, Option<usize>, Option<i32>) {
-    // eprintln!("resolve_loop_condition: header @{} stmts={:?} cond={:?}", block.offset, block.stmts, cond);
     let mut cond = strip_double_negation(cond);
 
-    // 1. Identify if the condition strictly relies on exactly ONE register
     let mut cond_regs = HashSet::new();
     collect_expr_regs(&cond, &mut cond_regs);
 
@@ -539,28 +564,11 @@ fn resolve_loop_condition(
 
     let r = *cond_regs.iter().next().unwrap();
 
-    // 2. Search header block itself
     for (i, stmt) in block.stmts.iter().enumerate().rev() {
         if let JsStmt::Assign { reg, expr } = stmt {
             if reg.reg == r {
                 substitute_reg(&mut cond, r, expr);
                 return (cond, Some(i), None);
-            }
-        }
-    }
-
-    // 3. Search predecessors
-    let idx = b2i[&block.offset];
-    for &pred_idx in &preds[idx] {
-        let pred = &blocks[pred_idx];
-        // skip back-edges (predecessor is inside the loop)
-        if pred.offset >= block.offset { continue; }
-        for (_, stmt) in pred.stmts.iter().enumerate().rev() {
-            if let JsStmt::Assign { reg, expr } = stmt {
-                if reg.reg == r {
-                    substitute_reg(&mut cond, r, expr);
-                    return (cond, None, Some(pred.offset));
-                }
             }
         }
     }

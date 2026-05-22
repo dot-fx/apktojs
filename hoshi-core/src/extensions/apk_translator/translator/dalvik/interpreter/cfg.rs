@@ -194,7 +194,6 @@ pub fn find_switch_end(
         None => return until,
     };
 
-    // Walk forward from the last target block until we exit
     let mut candidate_ends: Vec<i32> = Vec::new();
 
     for &t in &all_targets {
@@ -268,19 +267,21 @@ pub fn find_loop_end(
         return i32::MAX;
     }
 
+    let max_body_offset = blocks[max_back_idx].offset;
+
     if let Some(header_block) = blocks.get(start_idx) {
         if let Terminator::CondGoto { if_true, if_false, .. } = &header_block.term {
-            let max_body_offset = blocks[max_back_idx].offset;
+            let is_inside_loop = |target: i32| -> bool {
+                target >= header && target <= max_body_offset
+            };
 
-            let if_true_is_throw = b2i.get(if_true)
-                .and_then(|&i| blocks.get(i))
-                .map(|b| matches!(b.term, Terminator::Throw))
-                .unwrap_or(false);
+            let true_inside = is_inside_loop(*if_true);
+            let false_inside = is_inside_loop(*if_false);
 
-            if *if_true != header && !if_true_is_throw {
+            if !true_inside && false_inside {
                 return *if_true;
             }
-            if *if_false > max_body_offset && *if_false != header {
+            if !false_inside && true_inside {
                 return *if_false;
             }
         }
