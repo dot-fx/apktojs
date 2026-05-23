@@ -75,7 +75,7 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
             0x0C => { pc += 1; Insn::MoveResultObject(hi) }
             0x0D => { pc += 1; Insn::MoveException(hi) }
 
-            0x0E => { pc += 1; Insn::Return(0) }   // return-void
+            0x0E => { pc += 1; Insn::ReturnVoid }
             0x0F => { pc += 1; Insn::Return(hi) }
             0x10 => { pc += 1; Insn::ReturnWide(hi) }
             0x11 => { pc += 1; Insn::ReturnObject(hi) }

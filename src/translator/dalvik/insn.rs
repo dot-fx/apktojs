@@ -1,6 +1,7 @@
 #[derive(Debug, Clone)]
 pub enum Insn {
     Nop,
+    ReturnVoid,
     Return(u8),
     ReturnWide(u8),
     ReturnObject(u8),

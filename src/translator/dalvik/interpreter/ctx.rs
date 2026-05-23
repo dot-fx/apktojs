@@ -156,7 +156,7 @@ impl<'a> LiftCtx<'a> {
                 self.set(*d, JsExpr::Null, off),
 
             // Returns
-            Insn::Return(0) => self.push(off, JsStmt::Return(None)),
+            Insn::ReturnVoid => self.push(off, JsStmt::Return(None)),
             Insn::Return(r) | Insn::ReturnWide(r) | Insn::ReturnObject(r) => {
                 let e = self.reg(*r);
                 self.push(off, JsStmt::Return(Some(e)));
