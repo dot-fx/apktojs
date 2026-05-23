@@ -64,22 +64,10 @@ pub fn translate(
     for (stmts, _, _, _) in &lifted {
         infer_ctx.scan_stmts(stmts, &pool_mut, walked.dex_shard);
     }
-    let before: std::collections::HashMap<(usize, u32), Option<String>> = pool_mut.methods.iter()
-        .map(|(k, m)| (*k, m.js_name.clone()))
-        .collect();
 
     infer_ctx.apply(&mut pool_mut);
 
     let renames = rename_source_classes(&mut pool_mut, &meta.name);
-
-    for ((s, idx), m) in &pool_mut.methods {
-        let was = before.get(&(*s, *idx)).and_then(|v| v.as_deref());
-        let now = m.js_name.as_deref();
-        if now != was {
-            eprintln!("INFER WROTE: ({},{}) {} → {}",
-                      s, idx, m.method_name, now.unwrap_or("None"));
-        }
-    }
 
     let mut names = resolver::resolve::TypeNames::build(&pool_mut);
     for (full_name, new_name) in &renames {
@@ -111,18 +99,6 @@ pub fn translate(
             defined_in: defined_in.clone(),
             is_static: *is_static,
         });
-    }
-
-    for ((s, idx), m) in &pool_mut.methods {
-        if *s != walked.dex_shard { continue; }
-        if let Some(ev) = infer_ctx.evidence.get(&SymKey::Method(*s, *idx)) {
-            if infer_ctx.best_name(&SymKey::Method(*s, *idx)).is_none() && ev.entries.len() > 1 {
-                eprintln!("NO WIN ({},{}) class={} method={} entries: {:?}",
-                          s, idx, m.class_name, m.method_name,
-                          ev.entries.iter().map(|e| format!("{:?}", e.kind)).collect::<Vec<_>>()
-                );
-            }
-        }
     }
 
     let base_class = match walked.kind {
