@@ -487,6 +487,32 @@ pub fn render_class(
             .find(|(o, _)| *o == owner)
             .unwrap();
 
+        // --- AUTOMATED FIELD SCANNER ---
+        let mut assigned_fields = HashSet::new();
+        let mut read_fields = HashSet::new();
+
+        for method in group_methods {
+            for line in method.body.lines() {
+                if let Some(pos) = line.find("this.") {
+                    let sub = &line[pos + 5..];
+                    if let Some(end) = sub.find(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                        let field_name = sub[..end].to_string();
+                        if method.name == "<init>" {
+                            assigned_fields.insert(field_name);
+                        } else {
+                            read_fields.insert(field_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut missing_fields: Vec<String> = read_fields
+            .into_iter()
+            .filter(|f| !assigned_fields.contains(f) && f.ends_with("_val"))
+            .collect();
+        missing_fields.sort();
+
         let simple = names.resolve(&*owner);
         let super_name: Option<&str> =
             if is_main(&owner) {
@@ -512,7 +538,7 @@ pub fn render_class(
             extends_clause
         ));
 
-        emit_methods(&mut out, group_methods, &*owner, is_main(&owner));
+        emit_methods(&mut out, group_methods, &*owner, is_main(&owner), &missing_fields);
 
         out.push_str("}\n\n");
         if group_methods.iter().any(|m| m.name == "<clinit>") {
@@ -571,7 +597,8 @@ fn emit_methods(
     out: &mut String,
     methods: &[&JsMethod],
     owner_class: &str,
-    is_self: bool
+    is_self: bool,
+    missing_fields: &[String], // ← Added parameter
 ) {
     let mut seen_names = HashSet::new();
     let deduped: Vec<&&JsMethod> = methods.iter().rev()
@@ -583,6 +610,8 @@ fn emit_methods(
 
     out.push('\n');
     for method in deduped {
+        let is_constructor = method.name == "<init>";
+
         let mut max_arg: Option<usize> = None;
         for line in method.body.lines() {
             if let Some(pos) = line.find("arguments[") {
@@ -595,35 +624,40 @@ fn emit_methods(
             }
         }
 
-        let params = match max_arg {
-            None => String::new(),
-            Some(max) => (0..=max)
-                .map(|i| format!("arg{}", i))
-                .collect::<Vec<_>>()
-                .join(", "),
+        let mut params_list: Vec<String> = match max_arg {
+            None => vec![],
+            Some(max) => (0..=max).map(|i| format!("arg{}", i)).collect(),
         };
 
-        let mut body = match max_arg {
-            None => method.body.clone(),
-            Some(max) => {
-                let mut b = method.body.clone();
-
-                for i in 0..=max {
-                    b = b.replace(
-                        &format!("arguments[{}]", i),
-                        &format!("arg{}", i),
-                    );
-                }
-
-                b
+        let mut body = method.body.clone();
+        if let Some(max) = max_arg {
+            for i in 0..=max {
+                body = body.replace(
+                    &format!("arguments[{}]", i),
+                    &format!("arg{}", i),
+                );
             }
-        };
+        }
+
+        if is_constructor && !missing_fields.is_empty() {
+            let start_idx = params_list.len();
+            let mut prefix_body = String::new();
+
+            for (idx, field) in missing_fields.iter().enumerate() {
+                let arg_name = format!("arg{}", start_idx + idx);
+                params_list.push(arg_name.clone());
+                prefix_body.push_str(&format!("    this.{} = {};\n", field, arg_name));
+            }
+            body = format!("{}{}", prefix_body, body);
+        }
 
         body = fix_self_refs(
             &body,
             owner_class,
             is_self,
         );
+
+        let params = params_list.join(", ");
 
         out.push_str(&format!(
             "  {}{}({}) {{\n",
