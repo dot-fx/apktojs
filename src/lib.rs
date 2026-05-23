@@ -3,7 +3,7 @@ pub mod dex_extractor;
 pub mod dex_walker;
 pub mod translator;
 
-use std::io::{Cursor, Seek, Read};
+use std::io::{Cursor};
 
 use apk_inspector::{ApkMeta, ApkError};
 use dex_extractor::extract_dex;

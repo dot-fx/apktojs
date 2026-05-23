@@ -2,7 +2,7 @@ use std::io::{Read, Seek};
 
 use dex::{Dex, DexReader};
 use zip::ZipArchive;
-use crate::apk_inspector::ApkMeta;
+use crate::apk_inspector::{ApkError, ApkMeta};
 
 pub type ParsedDex = Dex<Vec<u8>>;
 
@@ -27,6 +27,15 @@ pub enum DexError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<DexError> for ApkError {
+    fn from(e: DexError) -> Self {
+        match e {
+            DexError::NoDex => ApkError::MissingManifest,
+            other => ApkError::Axml(other.to_string()),
+        }
+    }
 }
 
 pub fn extract_dex<R: Read + Seek>(
