@@ -431,8 +431,8 @@ pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
             0xD1 => { let w = next!() as i16; let i = Insn::RsubIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD2 => { let w = next!() as i16; let i = Insn::MulIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD3 => { let w = next!() as i16; let i = Insn::DivIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
-            0xD4 => { let w = next!() as i16; let i = Insn::AndIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
-            0xD5 => { let w = next!() as i16; let i = Insn::RemIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD4 => { let w = next!() as i16; let i = Insn::RemIntLit16(hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
+            0xD5 => { let w = next!() as i16; let i = Insn::AndIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD6 => { let w = next!() as i16; let i = Insn::OrIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
             0xD7 => { let w = next!() as i16; let i = Insn::XorIntLit16 (hi&0xF,(hi>>4)&0xF, w); pc += 1; i }
 
