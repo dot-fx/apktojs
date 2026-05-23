@@ -115,27 +115,14 @@ fn reloop(
             break;
         }
         if visited.contains(&idx) {
+            idx += 1;
             break;
         }
 
         if loop_headers.contains(&block.offset)
             && Some(block.offset) != current_loop
         {
-            let mut loop_end = cfg::find_loop_end(blocks, idx, block.offset, b2i);
-
-            if let Some(&end_idx) = b2i.get(&loop_end) {
-                if matches!(blocks[end_idx].term, Terminator::Throw | Terminator::Return(_)) {
-                    let mut structural_end = loop_end;
-                    for b in &blocks[idx..end_idx] {
-                        for t in cfg::block_successors(b) {
-                            if t > structural_end {
-                                structural_end = t;
-                            }
-                        }
-                    }
-                    loop_end = structural_end;
-                }
-            }
+            let loop_end = cfg::find_loop_end(blocks, idx, block.offset, b2i);
 
             let mut loop_visited = HashSet::new();
             loop_visited.insert(idx);
