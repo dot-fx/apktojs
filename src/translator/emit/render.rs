@@ -598,7 +598,7 @@ fn emit_methods(
     methods: &[&JsMethod],
     owner_class: &str,
     is_self: bool,
-    missing_fields: &[String], // ← Added parameter
+    missing_fields: &[String],
 ) {
     let mut seen_names = HashSet::new();
     let deduped: Vec<&&JsMethod> = methods.iter().rev()
@@ -641,14 +641,30 @@ fn emit_methods(
 
         if is_constructor && !missing_fields.is_empty() {
             let start_idx = params_list.len();
-            let mut prefix_body = String::new();
+            let mut injection_block = String::new();
 
             for (idx, field) in missing_fields.iter().enumerate() {
                 let arg_name = format!("arg{}", start_idx + idx);
                 params_list.push(arg_name.clone());
-                prefix_body.push_str(&format!("    this.{} = {};\n", field, arg_name));
+                injection_block.push_str(&format!("    this.{} = {};\n", field, arg_name));
             }
-            body = format!("{}{}", prefix_body, body);
+
+            let mut lines: Vec<String> = body.lines().map(|s| s.to_string()).collect();
+            let mut super_index = None;
+
+            for (idx, line) in lines.iter().enumerate() {
+                if line.contains("super(") {
+                    super_index = Some(idx);
+                    break;
+                }
+            }
+
+            if let Some(idx) = super_index {
+                lines.insert(idx + 1, injection_block.trim_end_matches('\n').to_string());
+                body = lines.join("\n");
+            } else {
+                body = format!("{}{}", injection_block, body);
+            }
         }
 
         body = fix_self_refs(
