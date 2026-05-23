@@ -263,12 +263,26 @@ fn reloop(
 
                 if Some(if_true) == current_loop {
                     out.push(JsStmt::If {
-                        cond: interpreter::negate(cond),
-                        then_body: vec![JsStmt::Break],
+                        cond: cond.clone(),
+                        then_body: vec![JsStmt::Continue],
                         else_body: vec![],
                     });
-                    out.push(JsStmt::Continue);
-                    break;
+
+                    let fall_idx = b2i.get(&if_false).copied().unwrap_or(blocks.len());
+                    idx = fall_idx;
+                    continue;
+                }
+
+                if Some(if_false) == current_loop {
+                    out.push(JsStmt::If {
+                        cond: interpreter::negate(cond.clone()),
+                        then_body: vec![JsStmt::Continue],
+                        else_body: vec![],
+                    });
+
+                    let branch_idx = b2i.get(&if_true).copied().unwrap_or(blocks.len());
+                    idx = branch_idx;
+                    continue;
                 }
 
                 let fall_idx   = b2i.get(&if_false).copied().unwrap_or(blocks.len());
@@ -276,7 +290,6 @@ fn reloop(
 
                 let join = find_join_relooper(blocks, b2i, fall_idx, branch_idx, until, block.offset);
 
-                // then = true branch
                 let mut then_body = Vec::new();
                 if branch_idx < blocks.len() {
                     let mut then_visited = visited.clone();
@@ -285,7 +298,6 @@ fn reloop(
                            &mut then_visited, &mut then_body, depth + 1, None);
                 }
 
-                // else = false branch (fall-through)
                 let mut else_body = Vec::new();
                 let mut else_visited = visited.clone();
                 reloop(blocks, b2i, loop_headers, preds,

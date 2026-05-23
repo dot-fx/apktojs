@@ -20,73 +20,52 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut i = 0;
 
     while i < stmts.len() {
-        if i + 3 < stmts.len() {
+        // Pattern 1: Iterator assignment followed immediately by the while loop
+        if i + 1 < stmts.len() {
             if let (
-                JsStmt::While { cond, body },
-                JsStmt::Assign { reg: str_reg, expr: JsExpr::Str(s) },
-                JsStmt::Assign { reg: result_reg, expr: JsExpr::MethodCall { method, args, .. } },
-            ) = (&stmts[i], &stmts[i + 1], &stmts[i + 2])
-            {
-                if let Some((inst_reg, class_name)) = try_rewrite_first_instance(body) {
-                    let iter_reg = extract_iter_reg(cond);
-                    let result_reg = result_reg.clone();
-                    let str_reg = str_reg.clone();
-                    let s = s.clone();
-                    let method = method.clone();
-                    let args = args.clone();
-
-                    // firstInstance result → inst_reg
-                    out.push(JsStmt::Assign {
-                        reg: inst_reg.clone(),
-                        expr: JsExpr::Raw(format!(
-                            "firstInstance(v{}_{} , (v{}_{} ) => v{}_{} instanceof {})",
-                            iter_reg.reg,
-                            iter_reg.version,
-                            iter_reg.reg,
-                            iter_reg.version,
-                            iter_reg.reg,
-                            iter_reg.version,
-                            class_name,
-                        )),
-                    });
-
-                    // preserve the string assign unchanged
-                    out.push(JsStmt::Assign {
-                        reg: str_reg,
-                        expr: JsExpr::Str(s),
-                    });
-
-                    // fix the method call receiver: Reg(6) → inst_reg
-                    out.push(JsStmt::Assign {
-                        reg: result_reg,
-                        expr: JsExpr::MethodCall {
-                            receiver: Box::new(JsExpr::Reg(inst_reg)),
-                            method,
-                            args,
-                            is_static: false,
-                        },
-                    });
-
-                    i += 3;
-                    continue;
+                JsStmt::Assign { reg: _, expr: JsExpr::MethodCall { receiver: coll_expr, method: iter_method, args: iter_args, .. } },
+                JsStmt::While { body, .. }
+            ) = (&stmts[i], &stmts[i + 1]) {
+                if iter_method == "iterator" && iter_args.is_empty() {
+                    if let Some((elem_reg, class_name)) = try_rewrite_first_instance(body) {
+                        // We found the collection! Emit clean JS: elem_reg = collection.firstInstance(...)
+                        out.push(JsStmt::Assign {
+                            reg: elem_reg.clone(),
+                            expr: JsExpr::Raw(format!(
+                                "{}.firstInstance(v{}_{} => v{}_{} instanceof {})",
+                                expr_to_str(coll_expr),
+                                elem_reg.reg,
+                                elem_reg.version,
+                                elem_reg.reg,
+                                elem_reg.version,
+                                class_name,
+                            )),
+                        });
+                        i += 2;
+                        continue;
+                    }
                 }
             }
         }
 
-        // 1-statement pattern: bare while with no following assign/throw
+        // Pattern 2: Fallback (Just the loop, iterator assigned earlier or elsewhere)
         if let JsStmt::While { cond, body } = &stmts[i] {
-            if let Some((inst_reg, class_name)) = try_rewrite_first_instance(body) {
-                let iter_reg = extract_iter_reg(cond);
+            if let Some((elem_reg, class_name)) = try_rewrite_first_instance(body) {
+                let iter_reg_str = if let Some(r) = extract_iter_reg(cond) {
+                    format!("v{}_{}", r.reg, r.version)
+                } else {
+                    "unknown_iter".to_string()
+                };
+
                 out.push(JsStmt::Assign {
-                    reg: inst_reg,
+                    reg: elem_reg.clone(),
                     expr: JsExpr::Raw(format!(
-                        "firstInstance(v{}_{} , (v{}_{} ) => v{}_{} instanceof {})",
-                        iter_reg.reg,
-                        iter_reg.version,
-                        iter_reg.reg,
-                        iter_reg.version,
-                        iter_reg.reg,
-                        iter_reg.version,
+                        "firstInstance({} , (v{}_{}) => v{}_{} instanceof {})",
+                        iter_reg_str,
+                        elem_reg.reg,
+                        elem_reg.version,
+                        elem_reg.reg,
+                        elem_reg.version,
                         class_name,
                     )),
                 });
@@ -102,14 +81,19 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     out
 }
 
-fn extract_iter_reg(cond: &JsExpr) -> RegId {
+fn extract_iter_reg(cond: &JsExpr) -> Option<RegId> {
+    // Navigate through `!= 0` or similar binops generated by lift.rs to find the `hasNext()` call
     match cond {
-        JsExpr::MethodCall { receiver, .. } => match receiver.as_ref() {
-            JsExpr::Reg(id) => id.clone(),
-            _ => RegId { reg: 5, version: 0 },
-        },
-        JsExpr::Reg(id) => id.clone(),
-        _ => RegId { reg: 5, version: 0 },
+        JsExpr::BinOp { left, .. } => extract_iter_reg(left),
+        JsExpr::MethodCall { receiver, .. } => {
+            if let JsExpr::Reg(id) = receiver.as_ref() {
+                Some(id.clone())
+            } else {
+                None
+            }
+        }
+        JsExpr::Reg(id) => Some(id.clone()),
+        _ => None,
     }
 }
 
@@ -140,29 +124,39 @@ fn rewrite_first_instance_stmt(stmt: JsStmt) -> JsStmt {
 }
 
 fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(RegId, String)> {
+    let mut element_reg: Option<RegId> = None;
     let mut instanceof_reg: Option<RegId> = None;
     let mut class_name: Option<String> = None;
 
     for stmt in body {
         match stmt {
-            JsStmt::Assign { reg, expr: JsExpr::Raw(s) } if s.contains("instanceof") => {
-                if let Some(cls) = s.split("instanceof").nth(1) {
-                    instanceof_reg = Some(reg.clone());
-                    class_name = Some(
-                        cls.trim()
-                            .trim_end_matches(|c| c == ')' || c == ';')
-                            .trim()
-                            .to_string()
-                    );
+            // 1. Find the iterator.next() assignment (e.g., v9_1 = v6_5.next())
+            JsStmt::Assign { reg, expr: JsExpr::MethodCall { method, args, .. } }
+            if method == "next" && args.is_empty() =>
+                {
+                    element_reg = Some(reg.clone());
                 }
-            }
+            // 2. Find the instanceof check (e.g., v10_1 = v9_1 instanceof z1)
+            JsStmt::Assign { reg, expr: JsExpr::BinOp { op, right, .. } }
+            if op == &"instanceof" =>
+                {
+                    if let JsExpr::Raw(cls) = right.as_ref() {
+                        instanceof_reg = Some(reg.clone());
+                        class_name = Some(cls.clone());
+                    }
+                }
+            // 3. Find the break condition (e.g., if (v10_1 !== 0) { break; })
             JsStmt::If { then_body, else_body, .. }
             if else_body.is_empty()
                 && then_body.len() == 1
-                && matches!(then_body[0], JsStmt::Break)
-                && instanceof_reg.is_some() =>
+                && matches!(then_body[0], JsStmt::Break) =>
                 {
-                    return Some((instanceof_reg.unwrap(), class_name.unwrap()));
+                    // Once we have all three components, we have successfully identified the pattern.
+                    if let (Some(elem), Some(_inst), Some(cls)) =
+                        (&element_reg, &instanceof_reg, &class_name)
+                    {
+                        return Some((elem.clone(), cls.clone()));
+                    }
                 }
             _ => {}
         }
@@ -219,6 +213,17 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
                 if method == "hasNext"
                     && args.is_empty()
                     && matches!(receiver.as_ref(), JsExpr::Reg(id) if id == &list_reg) => {}
+
+                // Allow un-wrapping BinOp since `!== 0` happens for conditionals
+                JsExpr::BinOp { left, .. } => {
+                    match left.as_ref() {
+                        JsExpr::MethodCall { receiver, method, args, .. }
+                        if method == "hasNext"
+                            && args.is_empty()
+                            && matches!(receiver.as_ref(), JsExpr::Reg(id) if id == &list_reg) => {}
+                        _ => return None,
+                    }
+                }
                 _ => return None,
             }
 
@@ -245,12 +250,14 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
     };
 
     let body_str = if callback_stmts.len() == 1 {
-        callback_stmts.iter()
+        callback_stmts
+            .iter()
             .map(stmt_to_str)
             .collect::<Option<Vec<_>>>()?
             .join("; ")
     } else {
-        let stmts_rendered = callback_stmts.iter()
+        let stmts_rendered = callback_stmts
+            .iter()
             .map(stmt_to_str)
             .collect::<Option<Vec<_>>>()?;
         format!("{{ {} }}", stmts_rendered.join("; "))
@@ -258,10 +265,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
 
     Some(format!(
         "{}.forEach(v{}_{} => {})",
-        list_expr,
-        item_reg.reg,
-        item_reg.version,
-        body_str
+        list_expr, item_reg.reg, item_reg.version, body_str
     ))
 }
 
@@ -273,30 +277,80 @@ fn expr_to_str(expr: &JsExpr) -> String {
             let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
             format!("{}.{}({})", r, method, a)
         }
+        JsExpr::StaticCall { class, method, args } => {
+            let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("{}.{}({})", class, method, a)
+        }
+        JsExpr::New { class, args } => {
+            let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("new {}({})", class, a)
+        }
         JsExpr::FieldGet { receiver, field } => format!("{}.{}", expr_to_str(receiver), field),
+        JsExpr::StaticFieldGet { class, field } => format!("{}.{}", class, field),
+        JsExpr::Index { arr, idx } => format!("{}[{}]", expr_to_str(arr), expr_to_str(idx)),
+        JsExpr::BinOp { op, left, right } => format!("({} {} {})", expr_to_str(left), op, expr_to_str(right)),
+        JsExpr::UnaryOp { op, expr } => format!("{}{}", op, expr_to_str(expr)),
+        JsExpr::BitMask { expr, mask } => format!("({} {})", expr_to_str(expr), mask),
+        JsExpr::ArrayLiteral(items) => {
+            let inner = items.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("[{}]", inner)
+        }
+        JsExpr::StringConcat(items) => {
+            items.iter().map(|e| format!("String({})", expr_to_str(e))).collect::<Vec<_>>().join(" + ")
+        }
+        JsExpr::ThisCtorCall { args } => {
+            let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("this({})", a)
+        }
+        JsExpr::SuperCall { args } => {
+            let a = args.iter().map(expr_to_str).collect::<Vec<_>>().join(", ");
+            format!("super({})", a)
+        }
         JsExpr::This => "this".into(),
-        JsExpr::Str(s) => format!("\"{}\"", s),
+        // Using Rust's Debug formatter {:?} properly escapes newlines, tabs, and quotes for JS
+        JsExpr::Str(s) => format!("{:?}", s),
         JsExpr::Int(n) => n.to_string(),
+        JsExpr::Float(f) => f.to_string(),
+        JsExpr::Bool(b) => b.to_string(),
         JsExpr::Null => "null".into(),
-        _ => "/* complex */".into(),
+        JsExpr::Raw(s) => s.clone(),
+        _ => "/* unhandled expr */".into(),
     }
 }
 
 fn stmt_to_str(stmt: &JsStmt) -> Option<String> {
     match stmt {
         JsStmt::Expr(e) => Some(expr_to_str(e)),
-        JsStmt::Assign { reg, expr } => Some(format!("v{}_{} = {}", reg.reg, reg.version, expr_to_str(expr))),
+        JsStmt::Assign { reg, expr } => Some(format!(
+            "v{}_{} = {}",
+            reg.reg,
+            reg.version,
+            expr_to_str(expr)
+        )),
         JsStmt::FieldSet { receiver, field, value } => Some(format!(
             "{}.{} = {}",
-            expr_to_str(receiver), field, expr_to_str(value)
+            expr_to_str(receiver),
+            field,
+            expr_to_str(value)
+        )),
+        JsStmt::StaticSet { class, field, value } => Some(format!(
+            "{}.{} = {}",
+            class,
+            field,
+            expr_to_str(value)
         )),
         JsStmt::ArraySet { arr, idx, value } => Some(format!(
             "{}[{}] = {}",
-            expr_to_str(arr), expr_to_str(idx), expr_to_str(value)
+            expr_to_str(arr),
+            expr_to_str(idx),
+            expr_to_str(value)
         )),
         JsStmt::Return(Some(e)) => Some(format!("return {}", expr_to_str(e))),
         JsStmt::Return(None) => Some("return".into()),
-        // Anything structurally complex (if/while/switch) can't inline into forEach — bail out
+        JsStmt::Break => Some("break".into()),
+        JsStmt::Continue => Some("continue".into()),
+        JsStmt::Comment(c) => Some(format!("// {}", c)),
+        // Anything structurally complex (if/while/switch/try) can't easily inline into a single-line forEach
         _ => None,
     }
 }
@@ -356,12 +410,7 @@ fn rewrite_add_stmt(stmt: JsStmt) -> JsStmt {
 
 fn rewrite_add_expr(expr: JsExpr) -> JsExpr {
     match expr {
-        JsExpr::MethodCall {
-            receiver,
-            method,
-            args,
-            is_static,
-        } if method == "add" => {
+        JsExpr::MethodCall { receiver, method, args, is_static } if method == "add" => {
             JsExpr::MethodCall {
                 receiver,
                 method: "push".into(),
@@ -369,9 +418,20 @@ fn rewrite_add_expr(expr: JsExpr) -> JsExpr {
                 is_static,
             }
         }
+
+        JsExpr::MethodCall { receiver, method, args, .. }
+        if (method == "length" || method == "size") && args.is_empty() =>
+            {
+                JsExpr::FieldGet {
+                    receiver,
+                    field: "length".into(),
+                }
+            }
+
         other => other,
     }
 }
+
 pub fn elide_redundant_assigns(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut out: Vec<JsStmt> = Vec::with_capacity(stmts.len());
     let mut iter = stmts.into_iter().peekable();

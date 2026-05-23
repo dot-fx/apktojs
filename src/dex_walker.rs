@@ -373,13 +373,12 @@ fn walk_hierarchy(
 
     for method in class.virtual_methods().iter().chain(class.direct_methods().iter()) {
         let name = method.name().to_string();
+        let (insns, registers_size, ins_size) = extract_insns(&method);
 
-        let key = format!("{}::{}", class_name, name);
+        let key = format!("{}::{}#{}", class_name, name, ins_size);
         if seen.contains(&key) {
             continue;
         }
-
-        let (insns, registers_size, ins_size) = extract_insns(&method);
 
         seen.insert(key);
         methods.push(SourceMethod {

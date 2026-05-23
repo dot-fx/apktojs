@@ -11,6 +11,7 @@ pub struct JsMethod {
     pub body: String,
     pub defined_in: String,
     pub is_static: bool,
+    pub param_count: usize,
 }
 
 fn hoist_super(stmts: Vec<JsStmt>, has_super: bool, names: &TypeNames, pool: &Pool) -> Vec<JsStmt> {
@@ -32,7 +33,6 @@ fn hoist_super(stmts: Vec<JsStmt>, has_super: bool, names: &TypeNames, pool: &Po
                 let tmp_name = format!("__super_tmp_{}_{}", field, tmp_counter);
                 tmp_counter += 1;
 
-                // Evaluate expression exactly where it belongs sequentially
                 let rendered_expr = expr_to_js(&value, has_super, names, pool);
                 result.push(JsStmt::Expr(JsExpr::Raw(format!("let {} = {}", tmp_name, rendered_expr))));
 
@@ -66,27 +66,6 @@ pub fn stmts_to_js(stmts: &[JsStmt], indent: usize, _method_name: &str, has_supe
     render_stmts(&stmts, indent, &mut declared, &mut lines, has_super, names, pool);
 
     lines.join("\n")
-}
-
-fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<RegId>) {
-    for stmt in stmts {
-        match stmt {
-            JsStmt::Assign { reg, .. } => { out.insert(reg.clone()); }
-            JsStmt::StaticGet { dst, .. } => { out.insert(dst.clone()); }
-            JsStmt::If { then_body, else_body, .. } => {
-                collect_assigned_regs(then_body, out);
-                collect_assigned_regs(else_body, out);
-            }
-            JsStmt::Loop { body } | JsStmt::While { body, .. } => {
-                collect_assigned_regs(body, out);
-            }
-            JsStmt::Switch { cases, default, .. } => {
-                for (_, body) in cases { collect_assigned_regs(body, out); }
-                if let Some(d) = default { collect_assigned_regs(d, out); }
-            }
-            _ => {}
-        }
-    }
 }
 
 fn is_valid_js_ident(s: &str) -> bool {
@@ -487,7 +466,6 @@ pub fn render_class(
             .find(|(o, _)| *o == owner)
             .unwrap();
 
-        // --- AUTOMATED FIELD SCANNER ---
         let mut assigned_fields = HashSet::new();
         let mut read_fields = HashSet::new();
 
@@ -538,7 +516,8 @@ pub fn render_class(
             extends_clause
         ));
 
-        emit_methods(&mut out, group_methods, &*owner, is_main(&owner), &missing_fields);
+        let has_super = !extends_clause.is_empty();
+        emit_methods(&mut out, group_methods, &*owner, is_main(&owner), has_super);
 
         out.push_str("}\n\n");
         if group_methods.iter().any(|m| m.name == "<clinit>") {
@@ -598,38 +577,49 @@ fn emit_methods(
     methods: &[&JsMethod],
     owner_class: &str,
     is_self: bool,
-    missing_fields: &[String],
+    has_super: bool,
 ) {
-    let mut seen_names = HashSet::new();
-    let deduped: Vec<&&JsMethod> = methods.iter().rev()
-        .filter(|m| seen_names.insert(m.name.clone()))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
+    let best_init: Option<&&JsMethod> = if has_super {
+        methods.iter()
+            .filter(|m| m.name == "<init>")
+            .max_by_key(|m| m.body.contains("super(") as usize)
+    } else {
+        methods.iter()
+            .filter(|m| m.name == "<init>")
+            .max_by_key(|m| m.param_count)
+    };
+
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut deduped: Vec<&&JsMethod> = Vec::new();
+
+    for method in methods.iter().rev() {
+        if method.name == "<init>" {
+            if seen_names.insert("<init>".to_string()) {
+                if let Some(best) = best_init {
+                    deduped.push(best);
+                }
+            }
+        } else if seen_names.insert(method.name.clone()) {
+            deduped.push(method);
+        }
+    }
+    deduped.reverse();
 
     out.push('\n');
     for method in deduped {
-        let is_constructor = method.name == "<init>";
+        let max_arg = if method.param_count > 0 {
+            Some(method.param_count - 1)
+        } else {
+            None
+        };
 
-        let mut max_arg: Option<usize> = None;
-        for line in method.body.lines() {
-            if let Some(pos) = line.find("arguments[") {
-                let after = &line[pos + "arguments[".len()..];
-                if let Some(end) = after.find(']') {
-                    if let Ok(i) = after[..end].parse::<usize>() {
-                        max_arg = Some(max_arg.map_or(i, |m: usize| m.max(i)));
-                    }
-                }
-            }
-        }
-
-        let mut params_list: Vec<String> = match max_arg {
+        let params_list: Vec<String> = match max_arg {
             None => vec![],
             Some(max) => (0..=max).map(|i| format!("arg{}", i)).collect(),
         };
 
         let mut body = method.body.clone();
+
         if let Some(max) = max_arg {
             for i in 0..=max {
                 body = body.replace(
@@ -639,39 +629,7 @@ fn emit_methods(
             }
         }
 
-        if is_constructor && !missing_fields.is_empty() {
-            let start_idx = params_list.len();
-            let mut injection_block = String::new();
-
-            for (idx, field) in missing_fields.iter().enumerate() {
-                let arg_name = format!("arg{}", start_idx + idx);
-                params_list.push(arg_name.clone());
-                injection_block.push_str(&format!("    this.{} = {};\n", field, arg_name));
-            }
-
-            let mut lines: Vec<String> = body.lines().map(|s| s.to_string()).collect();
-            let mut super_index = None;
-
-            for (idx, line) in lines.iter().enumerate() {
-                if line.contains("super(") {
-                    super_index = Some(idx);
-                    break;
-                }
-            }
-
-            if let Some(idx) = super_index {
-                lines.insert(idx + 1, injection_block.trim_end_matches('\n').to_string());
-                body = lines.join("\n");
-            } else {
-                body = format!("{}{}", injection_block, body);
-            }
-        }
-
-        body = fix_self_refs(
-            &body,
-            owner_class,
-            is_self,
-        );
+        body = fix_self_refs(&body, owner_class, is_self);
 
         let params = params_list.join(", ");
 
@@ -737,7 +695,6 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
                 .join(", ");
 
             if *is_static {
-                eprintln!("[static call] receiver={:?} method={}", receiver, method);
 
                 let class_name = match receiver.as_ref() {
                     JsExpr::Raw(s) => names.resolve(s),
@@ -759,17 +716,20 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
             if has_super {
                 format!("super({})", a)
             } else {
-                format!("/* super({}) -- no extends? */", a)
+                String::new()
             }
         }
 
         JsExpr::ThisCtorCall { args } => {
-            let a = args.iter()
-                .map(|e| expr_to_js(e, has_super, names, pool))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            format!("this.constructor({})", a)
+            if has_super {
+                String::new()
+            } else {
+                let a = args.iter()
+                    .map(|e| expr_to_js(e, has_super, names, pool))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("this.constructor({})", a)
+            }
         }
 
         JsExpr::StaticCall { class, method, args } => {
@@ -838,10 +798,6 @@ fn fix_self_refs(
     let mut out = body.to_string();
     if is_self {
         let from = format!("new {}(", owner_class);
-
-        if out.contains(&from) {
-            eprintln!("self ctor replace hit: {:?}", from);
-        }
 
         out = out.replace(
             &from,
