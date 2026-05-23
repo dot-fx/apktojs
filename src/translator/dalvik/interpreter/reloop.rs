@@ -210,10 +210,12 @@ fn reloop(
         match &block.term {
             Terminator::Return(e) => {
                 out.push(JsStmt::Return(e.clone()));
-                break;
+                idx += 1;
+                continue;
             }
             Terminator::ImplicitReturn | Terminator::Throw => {
-                break;
+                idx += 1;
+                continue;
             }
             Terminator::Goto(t) => {
                 let t = *t;
