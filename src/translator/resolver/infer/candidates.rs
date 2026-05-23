@@ -26,15 +26,7 @@ pub enum SignalTag {
 }
 
 pub static CANDIDATES: &[Candidate] = &[
-    Candidate {
-        name: "toSManga",
-        signals: &[
-            Signal { kind_tag: SignalTag::ResultPushedToList,              weight: 0.5 },
-            Signal { kind_tag: SignalTag::CalledOnIteratorNext,            weight: 0.5 },
-            Signal { kind_tag: SignalTag::PassedToKnown("push", 0),       weight: 0.4 },
-            Signal { kind_tag: SignalTag::ResultPushedToList, weight: 0.9 },
-        ],
-    },
+
 ];
 
 pub fn score_candidate(candidate: &Candidate, ev: &super::EvidenceSet) -> f32 {
