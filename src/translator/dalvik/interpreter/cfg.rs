@@ -275,11 +275,25 @@ pub fn find_loop_end(
                 target >= header && target <= max_body_offset
             };
 
-            let true_inside = is_inside_loop(*if_true);
+            let true_inside  = is_inside_loop(*if_true);
             let false_inside = is_inside_loop(*if_false);
 
             if !true_inside && false_inside {
-                return *if_true;
+                // if_true is the exit — but if it's a throw block, skip past it
+                let exit = *if_true;
+                if let Some(&exit_idx) = b2i.get(&exit) {
+                    let is_throw = matches!(blocks[exit_idx].term, Terminator::Throw)
+                        || blocks[exit_idx].stmts.iter().any(|s| matches!(s,
+                            JsStmt::Expr(JsExpr::UnaryOp { op, .. }) if *op == "throw "
+                        ));
+                    if is_throw {
+                        // real exit is the block after the backedge
+                        return blocks.get(max_back_idx + 1)
+                            .map(|b| b.offset)
+                            .unwrap_or(i32::MAX);
+                    }
+                }
+                return exit;
             }
             if !false_inside && true_inside {
                 return *if_false;
