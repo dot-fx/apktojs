@@ -2,8 +2,8 @@ pub mod insn;
 pub mod helpers;
 pub mod interpreter;
 
-use crate::extensions::apk_translator::translator::dalvik::helpers::{decode_invoke35, decode_invoke3rc, decode_invoke_args, parse_packed_switch, parse_sparse_switch, sign_extend_4, sign_extend_8, three_regs};
-use crate::extensions::apk_translator::translator::dalvik::insn::{DecodedInsn, Insn};
+use crate::translator::dalvik::helpers::{decode_invoke35, decode_invoke3rc, decode_invoke_args, parse_packed_switch, parse_sparse_switch, sign_extend_4, sign_extend_8, three_regs};
+use crate::translator::dalvik::insn::{DecodedInsn, Insn};
 
 pub fn decode(code: &[u16]) -> Vec<DecodedInsn> {
     let mut insns = Vec::new();

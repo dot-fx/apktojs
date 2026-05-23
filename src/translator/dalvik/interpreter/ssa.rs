@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::ir::RegId;
+use crate::translator::dalvik::interpreter::{JsExpr, JsStmt, TaggedStmt};
+use crate::translator::dalvik::interpreter::ir::RegId;
 
 pub fn rename(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut current: HashMap<u8, usize> = HashMap::new();

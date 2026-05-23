@@ -1,0 +1,11 @@
+[package]
+name = "apktojs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axmldecoder = "0.5"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+dex = "0.5"
+regex = "1.0"
+thiserror = "2.0.18"

@@ -1,9 +1,9 @@
 use dex::Dex;
-
-use crate::error::CoreError;
-use crate::extensions::apk_translator::{ApkMeta, ExtractedDex};
-use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::apk_inspector::ApkMeta;
+use crate::dex_extractor::ExtractedDex;
+use crate::translator::dalvik::decode;
+use crate::translator::dalvik::insn::Insn;
+use crate::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
 const HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/HttpSource;";
@@ -53,11 +53,6 @@ pub enum WalkError {
     Dex(String),
 }
 
-impl From<WalkError> for CoreError {
-    fn from(e: WalkError) -> Self {
-        CoreError::Parse(e.to_string())
-    }
-}
 
 pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Result<WalkedSource, WalkError> {
     let fq_class = resolve_ext_class(&meta.package, &meta.ext_class);
@@ -115,7 +110,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
         let mut referenced_descs: Vec<String> = Vec::new();
 
         for method in &all_methods_to_scan {
-            let decoded = crate::extensions::apk_translator::translator::dalvik::decode(&method.insns);
+            let decoded = decode(&method.insns);
             for d in &decoded {
                 match &d.insn {
                     Insn::SGet(_, field_idx)
@@ -205,7 +200,7 @@ fn find_factory_sources(
     shard: &Dex<Vec<u8>>,
     all_shards: &[Dex<Vec<u8>>],
 ) -> Vec<String> {
-    use crate::extensions::apk_translator::translator::dalvik::{self};
+    use crate::translator::dalvik::{self};
 
     let create_method = factory
         .virtual_methods()

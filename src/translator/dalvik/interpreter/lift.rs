@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use crate::extensions::apk_translator::translator::dalvik::insn::{DecodedInsn, Insn};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::ctx::LiftCtx;
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{reloop, ssa, JsExpr, JsStmt, RegId, TaggedStmt};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::cleanup::{cleanup};
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::translator::dalvik::insn::{DecodedInsn, Insn};
+use crate::translator::dalvik::interpreter::ctx::LiftCtx;
+use crate::translator::dalvik::interpreter::{reloop, ssa, JsExpr, JsStmt, RegId, TaggedStmt};
+use crate::translator::dalvik::interpreter::cleanup::{cleanup};
+use crate::translator::resolver::pool::Pool;
 
 pub fn lift(
     insns:          &[Insn],

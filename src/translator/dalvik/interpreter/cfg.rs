@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
+use crate::translator::dalvik::interpreter::{BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
 
 pub fn block_successors(b: &BasicBlock) -> Vec<i32> {
     match &b.term {
@@ -239,7 +239,7 @@ pub fn find_switch_end(
     for &e in &candidate_ends { *freq.entry(e).or_insert(0) += 1; }
 
     let best = freq.iter()
-        .filter(|(_, &c)| c > 1)
+        .filter(|(_, c)| **c > 1)
         .map(|(&o, _)| o)
         .min()
         .unwrap_or_else(|| *candidate_ends.iter().min().unwrap());

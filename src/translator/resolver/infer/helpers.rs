@@ -1,6 +1,6 @@
-use crate::extensions::apk_translator::translator::dalvik::interpreter::JsExpr;
-use crate::extensions::apk_translator::translator::resolver::infer::SymKey;
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::translator::dalvik::interpreter::JsExpr;
+use crate::translator::resolver::infer::SymKey;
+use crate::translator::resolver::pool::Pool;
 
 pub fn is_resolved_method(method: &str, pool: &Pool, shard: usize) -> bool {
     if parse_meth_token(method).is_some() {

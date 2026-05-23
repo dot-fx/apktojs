@@ -4,8 +4,6 @@ use std::path::Path;
 use axmldecoder::{Node, XmlDocument};
 use zip::ZipArchive;
 
-use crate::error::CoreError;
-
 #[derive(Debug, Clone)]
 pub struct ApkMeta {
     pub package: String,
@@ -36,12 +34,6 @@ pub enum ApkError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-}
-
-impl From<ApkError> for CoreError {
-    fn from(e: ApkError) -> Self {
-        CoreError::Parse(e.to_string())
-    }
 }
 
 fn get_attr<'a>(el: &'a axmldecoder::Element, key: &str) -> Option<&'a str> {

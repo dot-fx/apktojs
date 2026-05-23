@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId, TaggedStmt};
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
+use crate::translator::dalvik::insn::Insn;
+use crate::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId, TaggedStmt};
+use crate::translator::resolver::pool::Pool;
 
 pub struct LiftCtx<'a> {
     pub regs:         HashMap<u8, JsExpr>,

@@ -1,4 +1,4 @@
-use crate::extensions::apk_translator::translator::dalvik::insn::Insn;
+use crate::translator::dalvik::insn::Insn;
 
 pub fn sign_extend_4(v: u8) -> i8 {
     if v & 0x8 != 0 { (v as i8) | (-16i8) } else { v as i8 }

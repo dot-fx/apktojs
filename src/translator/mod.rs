@@ -2,11 +2,11 @@ pub mod dalvik;
 pub mod emit;
 pub mod resolver;
 
-use crate::error::CoreError;
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{lift, JsStmt};
-use crate::extensions::apk_translator::translator::resolver::infer::{rename_source_classes, InferCtx, SymKey};
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
-use crate::extensions::apk_translator::{ApkMeta, EntryKind, WalkedSource};
+use crate::apk_inspector::ApkMeta;
+use crate::dex_walker::{EntryKind, WalkedSource};
+use crate::translator::dalvik::interpreter::{lift, JsStmt};
+use crate::translator::resolver::infer::{rename_source_classes, InferCtx, SymKey};
+use crate::translator::resolver::pool::Pool;
 
 pub struct TranslatedSource {
     pub js: String,
@@ -21,12 +21,6 @@ impl TranslatedSource {
 pub enum TranslateError {
     #[error("translation error: {0}")]
     Internal(String),
-}
-
-impl From<TranslateError> for CoreError {
-    fn from(e: TranslateError) -> Self {
-        CoreError::Parse(e.to_string())
-    }
 }
 
 pub fn translate(

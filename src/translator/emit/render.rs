@@ -1,9 +1,10 @@
 use std::collections::HashSet;
-use crate::extensions::apk_translator::{ApkMeta, WalkedSource};
-use crate::extensions::apk_translator::translator::dalvik::interpreter;
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
-use crate::extensions::apk_translator::translator::resolver::pool::Pool;
-use crate::extensions::apk_translator::translator::resolver::resolve::TypeNames;
+use crate::apk_inspector::ApkMeta;
+use crate::dex_walker::WalkedSource;
+use crate::translator::dalvik::interpreter;
+use crate::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
+use crate::translator::resolver::pool::Pool;
+use crate::translator::resolver::resolve::TypeNames;
 
 pub struct JsMethod {
     pub name: String,

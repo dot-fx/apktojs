@@ -1,4 +1,4 @@
-use crate::extensions::apk_translator::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
+use crate::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
 
 pub fn cleanup(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let stmts = simplify_array_add(stmts);

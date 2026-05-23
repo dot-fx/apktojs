@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use dex::Dex;
 use dex::method::AccessFlags;
-use crate::extensions::apk_translator::translator::resolver::mappings::{
+use crate::translator::resolver::mappings::{
     from_dex_type,
     well_known_method,
 };
