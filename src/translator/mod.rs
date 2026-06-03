@@ -296,7 +296,7 @@ pub fn translate(
     }
 
     let base_class = match walked.kind {
-        EntryKind::Factory => "HttpSource",
+        EntryKind::Factory => "SourceFactory",
         EntryKind::Direct  => {
             if walked.hierarchy.iter().any(|h| h.contains("ParsedHttpSource")) {
                 "ParsedHttpSource"

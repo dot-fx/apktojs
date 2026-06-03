@@ -81,11 +81,14 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
                 &entry_class, shard, &extracted.dex_files,
             );
 
-            hierarchy.push(fq_class.clone());
-
             if source_descriptors.is_empty() {
                 return Err(WalkError::NotASource(fq_class.clone()));
             }
+
+            walk_hierarchy(
+                &entry_class, shard, &extracted.dex_files,
+                &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
+            );
 
             for desc in &source_descriptors {
                 if let Some((src_class, _, src_shard)) =

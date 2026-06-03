@@ -501,14 +501,21 @@ pub fn render_class(
                     && *s != "Object"
             });
 
-        let extends_clause = super_name
-            .filter(|&s|
-                s != "Object"
-                    && s != "java.lang.Object"
-                    && !s.ends_with(".Object")
-            )
-            .map(|s| format!(" extends {}", names.resolve(s)))
-            .unwrap_or_default();
+        let is_entry_class = owner == walked.class_name
+            || names.resolve(&*owner) == names.resolve(&walked.class_name);
+
+        let extends_clause = if is_entry_class && walked.kind == crate::dex_walker::EntryKind::Factory {
+            " extends SourceFactory".to_string()
+        } else {
+            super_name
+                .filter(|&s|
+                    s != "Object"
+                        && s != "java.lang.Object"
+                        && !s.ends_with(".Object")
+                )
+                .map(|s| format!(" extends {}", names.resolve(s)))
+                .unwrap_or_default()
+        };
 
         out.push_str(&format!(
             "class {}{} {{\n",
@@ -619,6 +626,9 @@ fn emit_methods(
         };
 
         let mut body = method.body.clone();
+        if has_super && method.name == "<init>" && !body.contains("super(") {
+            body = format!("    super();\n{}", body);
+        }
 
         if let Some(max) = max_arg {
             for i in 0..=max {
