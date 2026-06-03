@@ -492,14 +492,14 @@ pub fn render_class(
         missing_fields.sort();
 
         let simple = names.resolve(&*owner);
-        let super_name: Option<&str> =
-            if is_main(&owner) {
-                Some(base_class)
-            } else {
-                pool.type_info.get(&owner)
-                    .and_then(|t| t.superclass.as_deref())
-            };
-
+        let super_name: Option<&str> = pool.type_info
+            .get(&*owner)
+            .and_then(|t| t.superclass.as_deref())
+            .filter(|s| {
+                *s != "java.lang.Object"
+                    && !s.ends_with(".Object")
+                    && *s != "Object"
+            });
 
         let extends_clause = super_name
             .filter(|&s|

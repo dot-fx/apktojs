@@ -501,6 +501,12 @@ pub fn rename_source_classes(pool: &mut Pool, source_name: &str) -> HashMap<Stri
         if let Some(ti) = pool.type_info.remove(old_name) {
             pool.type_info.insert(new_name.clone(), ti);
         }
+
+        for ti in pool.type_info.values_mut() {
+            if ti.superclass.as_deref() == Some(old_name) {
+                ti.superclass = Some(new_name.clone());
+            }
+        }
     }
     renames
 }

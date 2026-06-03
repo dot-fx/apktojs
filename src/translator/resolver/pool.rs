@@ -46,7 +46,7 @@ impl Pool {
     pub fn field(&self, shard: usize, fi: u32) -> Option<&FieldInfo> {
         self.fields.get(&(shard, fi))
     }
-    
+
     pub fn build(shards: &[Dex<Vec<u8>>]) -> Self {
         let mut strings = HashMap::new();
         let mut methods = HashMap::new();
@@ -54,14 +54,24 @@ impl Pool {
         let mut types = HashMap::new();
         let mut type_info = HashMap::new();
 
+        let mut desc_to_shard: HashMap<String, usize> = HashMap::new();
         for (shard_idx, shard) in shards.iter().enumerate() {
-            
+            for class in shard.classes() {
+                if let Ok(class) = class {
+                    let desc = class.jtype().to_string();
+                    desc_to_shard.entry(desc).or_insert(shard_idx);
+                }
+            }
+        }
+
+        for (shard_idx, shard) in shards.iter().enumerate() {
+
             for (idx, s) in shard.strings().enumerate() {
                 if let Ok(s) = s {
                     strings.insert((shard_idx, idx as u32), s.to_string());
                 }
             }
-            
+
             for (idx, t) in shard.types().enumerate() {
                 if let Ok(t) = t {
                     let name = from_dex_type(t.to_string().as_str());
@@ -85,7 +95,7 @@ impl Pool {
                     });
                 }
             }
-            
+
             for (meth_idx, item) in shard.method_ids().enumerate() {
                 if let Ok(item) = item {
 
@@ -116,7 +126,7 @@ impl Pool {
                     }
                 }
             }
-            
+
             for (field_idx, item) in shard.field_ids().enumerate() {
                 if let Ok(item) = item {
 
@@ -139,7 +149,7 @@ impl Pool {
                     );
                 }
             }
-            
+
             for class in shard.classes() {
                 if let Ok(class) = class {
 
@@ -161,11 +171,13 @@ impl Pool {
                     if let Some(info) = type_info.get_mut(&class_name) {
 
                         // superclass
-                        info.superclass = class
-                            .super_class()
-                            .and_then(|id| shard.get_type(id).ok())
-                            .map(|t| from_dex_type(t.to_string().as_str()));
+                        info.superclass = class.super_class().and_then(|id| {
+                            let desc = shard.get_type(id).ok()?.to_string();
+                            if desc.is_empty() { return None; }
 
+                            Some(from_dex_type(&desc))
+                        });
+                        
                         // interfaces
                         info.interfaces = class
                             .interfaces()

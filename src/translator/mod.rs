@@ -231,9 +231,6 @@ pub fn translate(
         ));
     }
 
-    // Merge <init> overloads at the JsStmt level:
-    // find zero-param <init> per class, inline its stmts into the multi-param
-    // one at the ThisCtorCall site, with registers remapped to avoid collisions.
     let zero_inits: HashMap<String, Vec<JsStmt>> = lifted.iter()
         .filter(|(_, name, _, _, ins_size)| name == "<init>" && *ins_size == 1)
         .map(|(stmts, _, defined_in, _, _)| (defined_in.clone(), stmts.clone()))
@@ -263,6 +260,11 @@ pub fn translate(
     infer_ctx.apply(&mut pool_mut);
 
     let renames = rename_source_classes(&mut pool_mut, &meta.name);
+    for (_, _, defined_in, _, _) in &mut lifted {
+        if let Some(new_name) = renames.get(defined_in.as_str()) {
+            *defined_in = new_name.clone();
+        }
+    }
 
     let mut names = resolver::resolve::TypeNames::build(&pool_mut);
     for (full_name, new_name) in &renames {
@@ -270,7 +272,7 @@ pub fn translate(
     }
 
     for (stmts, method_name, defined_in, is_static, ins_size) in &lifted {
-        let has_super = pool.type_info.get(defined_in)
+        let has_super = pool_mut.type_info.get(defined_in)
             .and_then(|t| t.superclass.as_deref())
             .map(|s|
                 s != "Object"
@@ -280,12 +282,8 @@ pub fn translate(
             .unwrap_or(false);
 
         let body = emit::render::stmts_to_js(
-            stmts,
-            4,
-            method_name,
-            has_super,
-            &names,
-            &pool
+            stmts, 4, method_name, has_super, &names,
+            &pool_mut
         );
 
         js_methods.push(emit::render::JsMethod {
@@ -307,6 +305,12 @@ pub fn translate(
             }
         }
     };
+
+    for js_method in &mut js_methods {
+        if let Some(new_name) = renames.get(&js_method.defined_in) {
+            js_method.defined_in = new_name.clone();
+        }
+    }
 
     let raw_js = emit::render::render_class(
         &meta.name,

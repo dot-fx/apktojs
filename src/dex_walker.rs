@@ -3,6 +3,7 @@ use crate::apk_inspector::ApkMeta;
 use crate::dex_extractor::ExtractedDex;
 use crate::translator::dalvik::decode;
 use crate::translator::dalvik::insn::Insn;
+use crate::translator::resolver::mappings::from_dex_type;
 use crate::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
@@ -54,7 +55,7 @@ pub enum WalkError {
 }
 
 
-pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Result<WalkedSource, WalkError> {
+pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) -> Result<WalkedSource, WalkError> {
     let fq_class = resolve_ext_class(&meta.package, &meta.ext_class);
     let descriptor = to_dex_descriptor(&fq_class);
 
@@ -72,7 +73,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
         EntryKind::Direct => {
             walk_hierarchy(
                 &entry_class, shard, &extracted.dex_files,
-                &mut hierarchy, &mut methods, &mut seen_names, 0,
+                &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
             );
         }
         EntryKind::Factory => {
@@ -92,7 +93,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
                 {
                     walk_hierarchy(
                         &src_class, src_shard, &extracted.dex_files,
-                        &mut hierarchy, &mut methods, &mut seen_names, 0,
+                        &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
                     );
                 }
             }
@@ -175,7 +176,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &Pool) -> Res
                 let mut helper_seen = std::collections::HashSet::new();
                 walk_hierarchy(
                     &helper_class, helper_shard, &extracted.dex_files,
-                    &mut hierarchy, &mut new_methods, &mut helper_seen, 0,
+                    &mut hierarchy, &mut new_methods, &mut helper_seen, pool, 0,
                 );
                 found_any = true;
             }
@@ -238,7 +239,6 @@ fn find_factory_sources(
                 || fq.starts_with("kotlin.")
                 || fq.starts_with("android.")
                 || fq.starts_with("androidx.")
-                || fq.starts_with("eu.kanade.tachiyomi.source.")  // base classes only
             {
                 continue;
             }
@@ -316,18 +316,16 @@ fn extends_http_source(
     all_shards: &[Dex<Vec<u8>>],
     depth: usize,
 ) -> bool {
-    if depth > 8 {
-        return false;
-    }
+    if depth > 8 { return false; }
 
     let super_id = match class.super_class() {
         Some(id) => id,
         None => return false,
     };
 
-    let super_desc = match shard.get_type(super_id) {
-        Ok(t) => t.to_string(),
-        Err(_) => return false,
+    let super_desc = match resolve_type_across_shards(super_id, shard, all_shards) {
+        Some(s) => s,
+        None => return false,
     };
 
     if super_desc == HTTP_SOURCE || super_desc == PARSED_HTTP_SOURCE {
@@ -338,9 +336,8 @@ fn extends_http_source(
         .or_else(|| find_class_in_shards(all_shards, &super_desc));
 
     match found {
-        Some((super_class, _, super_shard)) => {
-            extends_http_source(&super_class, super_shard, all_shards, depth + 1)
-        }
+        Some((super_class, _, super_shard)) =>
+            extends_http_source(&super_class, super_shard, all_shards, depth + 1),
         None => false,
     }
 }
@@ -352,6 +349,7 @@ fn walk_hierarchy(
     hierarchy: &mut Vec<String>,
     methods: &mut Vec<SourceMethod>,
     seen: &mut std::collections::HashSet<String>,
+    pool: &mut Pool,
     depth: usize,
 ) {
     if depth > 8 {
@@ -370,6 +368,27 @@ fn walk_hierarchy(
     }
 
     hierarchy.push(class_name.clone());
+
+
+    let resolved_super = class
+        .super_class()
+        .and_then(|id| resolve_type_across_shards(id, shard, all_shards))
+        .map(|t| from_dex_descriptor(&t))
+        .filter(|s| !s.is_empty() && s != "java.lang.Object");
+
+    let entry = pool.type_info
+        .entry(class_name.clone())
+        .or_insert_with(|| crate::translator::resolver::pool::TypeInfo {
+            full_name: "".to_string(),
+            simple_name: "".to_string(),
+            superclass: None,
+            interfaces: vec![],
+            methods: vec![],
+        });
+
+    if entry.superclass.is_none() {
+        entry.superclass = resolved_super;
+    }
 
     for method in class.virtual_methods().iter().chain(class.direct_methods().iter()) {
         let name = method.name().to_string();
@@ -392,12 +411,8 @@ fn walk_hierarchy(
     }
 
     if let Some(super_id) = class.super_class() {
-        if let Ok(super_type) = shard.get_type(super_id) {
-            let super_desc = super_type.to_string();
-            let found = find_class_in_shards(
-                std::slice::from_ref(shard),
-                &super_desc,
-            )
+        if let Some(super_desc) = resolve_type_across_shards(super_id, shard, all_shards) {
+            let found = find_class_in_shards(std::slice::from_ref(shard), &super_desc)
                 .or_else(|| find_class_in_shards(all_shards, &super_desc));
 
             if let Some((super_class, _, super_shard)) = found {
@@ -408,6 +423,7 @@ fn walk_hierarchy(
                     hierarchy,
                     methods,
                     seen,
+                    pool,
                     depth + 1,
                 );
             }
@@ -423,4 +439,29 @@ fn extract_insns(method: &dex::method::Method) -> (Vec<u16>, u16, u16) {
             code.ins_size(),
         ))
         .unwrap_or((vec![], 0, 0))
+}
+
+fn resolve_type_across_shards(
+    super_id: u32,
+    primary_shard: &Dex<Vec<u8>>,
+    all_shards: &[Dex<Vec<u8>>],
+) -> Option<String> {
+    if let Ok(t) = primary_shard.get_type(super_id) {
+        let s = t.to_string();
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    for shard in all_shards {
+        if std::ptr::eq(shard as *const _, primary_shard as *const _) {
+            continue;
+        }
+        if let Ok(t) = shard.get_type(super_id) {
+            let s = t.to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
 }

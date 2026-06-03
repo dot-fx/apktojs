@@ -25,9 +25,9 @@ pub fn apk_to_js(bytes: &[u8]) -> Result<TranslationResult, ApkError> {
 
     let extracted = extract_dex(&mut zip, &meta)?;
 
-    let pool = Pool::build(&extracted.dex_files);
+    let mut pool = Pool::build(&extracted.dex_files);
 
-    let walked = walk_source(&extracted, &meta, &pool)
+    let walked = walk_source(&extracted, &meta, &mut pool)
         .map_err(|e| ApkError::Axml(e.to_string()))?;
 
     let translated = translator::translate(&walked, &meta, &pool)
