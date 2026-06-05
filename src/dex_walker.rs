@@ -3,7 +3,6 @@ use crate::apk_inspector::ApkMeta;
 use crate::dex_extractor::ExtractedDex;
 use crate::translator::dalvik::decode;
 use crate::translator::dalvik::insn::Insn;
-use crate::translator::resolver::mappings::from_dex_type;
 use crate::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
@@ -13,6 +12,13 @@ const PARSED_HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/source/online/ParsedHttpS
 /// DEX type descriptor for SourceFactory.
 const SOURCE_FACTORY: &str = "Leu/kanade/tachiyomi/source/SourceFactory;";
 const CREATE_SOURCES: &str = "createSources";
+
+/// DEX type descriptor for AnimeHttpSource.
+const ANIME_HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/animesource/online/AnimeHttpSource;";
+/// DEX type descriptor for ParsedAnimeHttpSource.
+const PARSED_ANIME_HTTP_SOURCE: &str = "Leu/kanade/tachiyomi/animesource/online/ParsedAnimeHttpSource;";
+/// DEX type descriptor for AnimeSourceFactory.
+const ANIME_SOURCE_FACTORY: &str = "Leu/kanade/tachiyomi/animesource/AnimeSourceFactory;";
 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -299,7 +305,8 @@ fn detect_kind(
     all_shards: &[Dex<Vec<u8>>],
 ) -> Result<EntryKind, WalkError> {
     for iface in class.interfaces() {
-        if iface.to_string() == SOURCE_FACTORY {
+        let iface_str = iface.to_string();
+        if iface_str == SOURCE_FACTORY || iface_str == ANIME_SOURCE_FACTORY {
             return Ok(EntryKind::Factory);
         }
     }
@@ -331,7 +338,11 @@ fn extends_http_source(
         None => return false,
     };
 
-    if super_desc == HTTP_SOURCE || super_desc == PARSED_HTTP_SOURCE {
+    if super_desc == HTTP_SOURCE
+        || super_desc == PARSED_HTTP_SOURCE
+        || super_desc == ANIME_HTTP_SOURCE
+        || super_desc == PARSED_ANIME_HTTP_SOURCE
+    {
         return true;
     }
 
@@ -366,6 +377,8 @@ fn walk_hierarchy(
         || class_name.starts_with("android.")
         || class_name == "eu.kanade.tachiyomi.source.online.HttpSource"
         || class_name == "eu.kanade.tachiyomi.source.online.ParsedHttpSource"
+        || class_name == "eu.kanade.tachiyomi.animesource.online.AnimeHttpSource"
+        || class_name == "eu.kanade.tachiyomi.animesource.online.ParsedAnimeHttpSource"
     {
         return;
     }

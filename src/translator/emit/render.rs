@@ -533,8 +533,12 @@ pub fn render_class(
     }
 
     let re = regex::Regex::new(r"new (\w+)\(").unwrap();
+    let re2 = regex::Regex::new(r"(\w+)\.Companion").unwrap();
+    let re3 = regex::Regex::new(r"(\w+)\.\w+").unwrap();
+
     let static_init_set: HashSet<String> = static_inits.iter().cloned().collect();
     let mut si_deps: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
     for cls in &static_inits {
         let body = methods.iter()
             .find(|m| m.name == "<clinit>" && names.resolve(&m.defined_in) == *cls)
@@ -548,13 +552,13 @@ pub fn render_class(
 
         let combined = format!("{}\n{}", body, ctor_body);
 
-        let re2 = regex::Regex::new(r"(\w+)\.Companion").unwrap();
-
         let deps: Vec<String> = re.captures_iter(&combined)
-            .map(|c| c[1].to_string())
-            .chain(re2.captures_iter(&combined).map(|c| c[1].to_string()))
-            .filter(|c| static_init_set.contains(c) && c != cls)
+            .map(|c| names.resolve(&c[1]))
+            .chain(re2.captures_iter(&combined).map(|c| names.resolve(&c[1])))
+            .chain(re3.captures_iter(&combined).map(|c| names.resolve(&c[1])))
+            .filter(|resolved_c| static_init_set.contains(resolved_c) && resolved_c != cls)
             .collect();
+
         si_deps.insert(cls.clone(), deps);
     }
     fn si_visit(cls: &str, deps: &std::collections::HashMap<String, Vec<String>>, seen: &mut HashSet<String>, out: &mut Vec<String>) {

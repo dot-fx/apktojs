@@ -29,7 +29,7 @@ pub enum ApkError {
     #[error("missing required attribute '{0}' in manifest")]
     MissingAttr(&'static str),
 
-    #[error("not a Mihon/Tachiyomi extension (no tachiyomi.extension.class meta-data)")]
+    #[error("not a Mihon/Tachiyomi/Aniyomi extension (no tachiyomi.extension.class or tachiyomi.animeextension.class meta-data)")]
     NotAnExtension,
 
     #[error("io error: {0}")]
@@ -82,10 +82,23 @@ fn parse_manifest(bytes: &[u8]) -> Result<ApkMeta, ApkError> {
             }
             "meta-data" => {
                 match get_attr(el, "name") {
+                    // Mihon/Tachiyomi manga extensions
                     Some("tachiyomi.extension.class") => {
                         ext_class = get_attr(el, "value").map(str::to_string);
                     }
+                    // Aniyomi anime extensions
+                    Some("tachiyomi.animeextension.class") => {
+                        ext_class = get_attr(el, "value").map(str::to_string);
+                    }
+                    // Manga NSFW flag
                     Some("tachiyomi.extension.nsfw") => {
+                        nsfw = get_attr(el, "value")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .map(|n| n != 0)
+                            .unwrap_or(false);
+                    }
+                    // Anime NSFW flag
+                    Some("tachiyomi.animeextension.nsfw") => {
                         nsfw = get_attr(el, "value")
                             .and_then(|v| v.parse::<u32>().ok())
                             .map(|n| n != 0)
@@ -139,7 +152,8 @@ where
 
 fn parse_package_suffix(package: &str) -> (String, String) {
     let suffix = package
-        .strip_prefix("eu.kanade.tachiyomi.extension.")
+        .strip_prefix("eu.kanade.tachiyomi.animeextension.")
+        .or_else(|| package.strip_prefix("eu.kanade.tachiyomi.extension."))
         .or_else(|| package.strip_prefix("eu.kanade.tachiyomi."))
         .unwrap_or(package);
 
