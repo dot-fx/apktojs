@@ -5,6 +5,7 @@ use crate::translator::resolver::pool::Pool;
 
 pub struct LiftCtx<'a> {
     pub regs:         HashMap<u8, JsExpr>,
+    pub known_constants: HashMap<u8, JsExpr>,
     pub tagged:       Vec<TaggedStmt>,
     pub warnings:     Vec<String>,
     pub result:       Option<JsExpr>,
@@ -30,9 +31,18 @@ impl<'a> LiftCtx<'a> {
     }
 
     fn set(&mut self, r: u8, expr: JsExpr, offset: i32) {
+        match &expr {
+            JsExpr::Int(_) | JsExpr::Null => {
+                self.known_constants.insert(r, expr.clone());
+            }
+            _ => {
+                self.known_constants.remove(&r);
+            }
+        }
+
         self.push(offset, JsStmt::Assign {
             reg: RegId { reg: r, version: 0 },
-            expr,
+            expr: expr.clone(),
         });
 
         self.regs.insert(
@@ -222,7 +232,7 @@ impl<'a> LiftCtx<'a> {
                     .unwrap_or(false);
                 let call = JsExpr::MethodCall {
                     receiver: Box::new(JsExpr::Raw("super".into())),
-                    method:   format!("_meth{}", method_idx),
+                    method:   self.method_ref(*method_idx),
                     args:     arg_exprs,
                     is_static
                 };
@@ -232,28 +242,47 @@ impl<'a> LiftCtx<'a> {
 
             Insn::InvokeDirect { args, method_idx } => {
                 if let Some(&recv_reg) = args.first() {
-
-                    // new Foo(...)
                     if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
-                        let ctor_args: Vec<JsExpr> = args.iter()
+                        let mut ctor_args: Vec<JsExpr> = args.iter()
                             .skip(1)
                             .map(|r| self.reg(*r))
                             .collect();
 
-                        self.set(
-                            recv_reg,
-                            JsExpr::New {
-                                class: self.type_ref(type_idx),
-                                args: ctor_args,
-                            },
-                            off,
-                        );
+                        if ctor_args.len() >= 2 {
+                            let resolve = |expr: &JsExpr| -> Option<JsExpr> {
+                                match expr {
+                                    JsExpr::Reg(id) => self.known_constants.get(&id.reg).cloned(),
+                                    other => Some(other.clone()),
+                                }
+                            };
+
+                            let marker_val = resolve(&ctor_args[ctor_args.len() - 1]);
+                            let mask_val   = resolve(&ctor_args[ctor_args.len() - 2]);
+
+                            let is_marker = matches!(&marker_val, Some(JsExpr::Int(0)) | Some(JsExpr::Null) | None);
+                            let is_mask   = matches!(&mask_val,   Some(JsExpr::Int(n)) if *n > 0);
+
+                            if is_marker && is_mask {
+                                if let Some(JsExpr::Int(mask)) = mask_val {
+                                    ctor_args.truncate(ctor_args.len() - 2);
+                                    for i in 0..ctor_args.len() {
+                                        if (mask >> i) & 1 == 1 && i > 0 {
+                                            ctor_args[i] = ctor_args[0].clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        self.set(recv_reg, JsExpr::New {
+                            class: self.type_ref(type_idx),
+                            args: ctor_args,
+                        }, off);
 
                         self.pending_call = None;
                         return;
                     }
 
-                    // ctor invoke on this
                     let recv_expr = self.reg(recv_reg);
 
                     if matches!(recv_expr, JsExpr::This) || recv_reg == self.this_reg.unwrap_or(255) {
@@ -299,12 +328,43 @@ impl<'a> LiftCtx<'a> {
                     .unwrap_or_else(|| "UnknownClass".into());
 
                 let method = self.method_ref(*method_idx);
-                let call = JsExpr::StaticCall {
-                    class,
-                    method,
-                    args: arg_exprs,
-                };
-                self.result       = Some(call.clone());
+
+                let is_default_ctor = info
+                    .map(|m| m.method_name.contains("$default") && m.method_name.contains("<init>"))
+                    .unwrap_or(false);
+
+                if is_default_ctor && arg_exprs.len() >= 2 {
+                    let recv_reg = args[0];
+                    if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
+                        let real_args_end = arg_exprs.len() - 2;
+                        let mut ctor_args: Vec<JsExpr> = arg_exprs[1..real_args_end].to_vec();
+
+                        let mask_expr = match &arg_exprs[arg_exprs.len() - 2] {
+                            JsExpr::Reg(id) => self.known_constants.get(&id.reg).cloned(),
+                            other => Some(other.clone()),
+                        };
+
+                        if let Some(JsExpr::Int(mask)) = mask_expr {
+                            let mask = mask;
+                            for i in 0..ctor_args.len() {
+                                if (mask >> i) & 1 == 1 {
+                                    ctor_args[i] = ctor_args[0].clone();
+                                }
+                            }
+                        }
+
+                        self.set(recv_reg, JsExpr::New {
+                            class: self.type_ref(type_idx),
+                            args: ctor_args,
+                        }, off);
+
+                        self.pending_call = None;
+                        return;
+                    }
+                }
+
+                let call = JsExpr::StaticCall { class, method, args: arg_exprs };
+                self.result = Some(call.clone());
                 self.pending_call = Some((off, call));
             }
 
@@ -372,12 +432,37 @@ impl<'a> LiftCtx<'a> {
 
                 if let Some(&recv_reg) = regs.first() {
 
-                    // new Foo(...)
                     if let Some(type_idx) = self.pending_new.remove(&recv_reg) {
-                        let ctor_args: Vec<JsExpr> = regs.iter()
+                        let mut ctor_args: Vec<JsExpr> = regs.iter()
                             .skip(1)
                             .map(|r| self.reg(*r))
                             .collect();
+
+                        if ctor_args.len() >= 2 {
+                            let resolve = |expr: &JsExpr| -> Option<JsExpr> {
+                                match expr {
+                                    JsExpr::Reg(id) => self.regs.get(&id.reg).cloned(),
+                                    other => Some(other.clone()),
+                                }
+                            };
+
+                            let marker_val = resolve(&ctor_args[ctor_args.len() - 1]);
+                            let mask_val   = resolve(&ctor_args[ctor_args.len() - 2]);
+
+                            let is_marker = matches!(&marker_val, Some(JsExpr::Int(0)) | Some(JsExpr::Null) | None);
+                            let is_mask   = matches!(&mask_val,   Some(JsExpr::Int(n)) if *n > 0);
+
+                            if is_marker && is_mask {
+                                if let Some(JsExpr::Int(mask)) = mask_val {
+                                    ctor_args.truncate(ctor_args.len() - 2);
+                                    for i in 0..ctor_args.len() {
+                                        if (mask >> i) & 1 == 1 && i > 0 {
+                                            ctor_args[i] = ctor_args[0].clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         let expr = JsExpr::New {
                             class: self.type_ref(type_idx),

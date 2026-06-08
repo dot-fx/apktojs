@@ -264,7 +264,7 @@ fn try_rewrite_foreach(s0: &JsStmt, s1: &JsStmt, s2: &JsStmt) -> Option<String> 
     };
 
     Some(format!(
-        "{}.forEach(v{}_{} => {})",
+        "{}.forEach((__item) => {{ let v{}_{} = __item; {} }})",
         list_expr, item_reg.reg, item_reg.version, body_str
     ))
 }

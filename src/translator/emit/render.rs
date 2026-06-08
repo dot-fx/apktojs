@@ -210,6 +210,10 @@ fn render_stmts(
                 let field_name = if pool.type_info.get(class)
                     .map(|t| t.methods.iter().any(|m| m == field))
                     .unwrap_or(false)
+                    || pool.type_info.values().any(|t| {
+                    (t.full_name == *class || t.simple_name == names.resolve(class))
+                        && t.methods.iter().any(|m| m == field)
+                })
                 {
                     format!("{}_val", field)
                 } else {
@@ -241,12 +245,17 @@ fn render_stmts(
                 let field_name = if pool.type_info.get(class)
                     .map(|t| t.methods.iter().any(|m| m == field))
                     .unwrap_or(false)
+                    || pool.type_info.values().any(|t| {
+                    (t.full_name == *class || t.simple_name == names.resolve(class))
+                        && t.methods.iter().any(|m| m == field)
+                })
                 {
                     format!("{}_val", field)
                 } else {
                     field.clone()
                 };
-                lines.push(format!("{}{}.{} = {};", pad, resolved_class, field_name, expr_to_js(value, has_super, names, pool)));
+                lines.push(format!("{}{}.{} = {};", pad, resolved_class, field_name,
+                                   expr_to_js(value, has_super, names, pool)));
             }
 
             JsStmt::FieldSet { receiver, field, value } => {
@@ -686,6 +695,10 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
             let field_name = if pool.type_info.get(class)
                 .map(|t| t.methods.iter().any(|m| m == field))
                 .unwrap_or(false)
+                || pool.type_info.values().any(|t| {
+                (t.full_name == *class || t.simple_name == names.resolve(class))
+                    && t.methods.iter().any(|m| m == field)
+            })
             {
                 format!("{}_val", field)
             } else {

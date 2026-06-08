@@ -22,6 +22,7 @@ pub fn lift(
 
     let mut ctx = LiftCtx {
         regs:         HashMap::new(),
+        known_constants: HashMap::new(),
         tagged:       Vec::new(),
         warnings:     Vec::new(),
         result:       None,
