@@ -62,8 +62,10 @@ impl<'a> LiftCtx<'a> {
 
     pub fn flush_pending_call(&mut self, at_offset: i32) {
         if let Some((off, call)) = self.pending_call.take() {
-            self.push(off, JsStmt::Expr(call));
-            let _ = at_offset;
+            if self.result.is_some() {
+                self.result = None;
+                self.push(off, JsStmt::Expr(call));
+            }
         }
     }
 

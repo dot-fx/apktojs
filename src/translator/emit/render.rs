@@ -29,28 +29,45 @@ fn hoist_super(stmts: Vec<JsStmt>, has_super: bool, names: &TypeNames, pool: &Po
 
     for stmt in stmts[..super_pos].iter().cloned() {
         match stmt {
-            JsStmt::FieldSet { receiver: JsExpr::This, field, value } => {
+            // this.x = expr  before super() → temp it, defer the assignment
+            JsStmt::FieldSet { receiver: JsExpr::This, ref field, ref value } => {
                 let tmp_name = format!("__super_tmp_{}_{}", field, tmp_counter);
                 tmp_counter += 1;
 
-                let rendered_expr = expr_to_js(&value, has_super, names, pool);
-                result.push(JsStmt::Expr(JsExpr::Raw(format!("let {} = {}", tmp_name, rendered_expr))));
+                let rendered_expr = expr_to_js(value, has_super, names, pool);
+                let safe_expr = if rendered_expr.trim().is_empty() {
+                    "undefined".to_string()
+                } else {
+                    rendered_expr
+                };
+
+                // declare the temp before super()
+                result.push(JsStmt::Expr(JsExpr::Raw(
+                    format!("var {} = {};", tmp_name, safe_expr)
+                )));
 
                 let field_name = {
-                    let has_conflict = pool.type_info.values().any(|t| t.methods.iter().any(|m| m == &field));
+                    let has_conflict = pool.type_info.values()
+                        .any(|t| t.methods.iter().any(|m| m == field));
                     if has_conflict { format!("{}_val", field) } else { field.clone() }
                 };
-                let this_prop = js_prop("this", &field_name);
-                deferred.push(JsStmt::Expr(JsExpr::Raw(format!("{} = {}", this_prop, tmp_name))));
+
+                // assign from temp after super()
+                deferred.push(JsStmt::Expr(JsExpr::Raw(
+                    format!("{} = {};", js_prop("this", &field_name), tmp_name)
+                )));
             }
+
+            // Any other this.x = expr (non-This receiver FieldSet) stays in place
+            // All Assign, Expr, Comment, etc. stay before super() — they don't touch `this`
             other => {
-                result.push(other); // Keep everything else exactly in place
+                result.push(other);
             }
         }
     }
 
-    result.push(stmts[super_pos].clone());  // super(...)
-    result.extend(deferred);                // Safe to assign properties now
+    result.push(stmts[super_pos].clone());   // super(...)
+    result.extend(deferred);                  // this.x = __super_tmp_x_N
     result.extend(stmts[super_pos + 1..].iter().cloned());
     result
 }
@@ -116,6 +133,12 @@ fn render_method_name(name: &str) -> String {
         "<init>"   => "constructor".to_string(),
         "<clinit>" => "__static_init__".to_string(),
         _ => {
+            let name = if let Some(pos) = name.find('-') {
+                &name[..pos]
+            } else {
+                name
+            };
+
             if is_valid_js_ident(name) {
                 name.to_string()
             } else {
@@ -194,6 +217,16 @@ fn render_stmts(
     for stmt in stmts {
         match stmt {
             JsStmt::Assign { reg, expr } => {
+                let rendered = expr_to_js(expr, has_super, names, pool);
+
+                let clean_expr = if rendered.trim().is_empty() {
+                    "undefined".to_string()
+                } else if rendered.trim().starts_with("var ") || rendered.trim().starts_with("let ") {
+                    rendered.trim().split('=').last().unwrap_or("undefined").replace(';', "").trim().to_string()
+                } else {
+                    rendered
+                };
+
                 let prefix = if declared.insert(reg.clone()) { "var " } else { "" };
                 lines.push(format!(
                     "{}{}v{}_{} = {};",
@@ -201,7 +234,7 @@ fn render_stmts(
                     prefix,
                     reg.reg,
                     reg.version,
-                    expr_to_js(expr, has_super, names, pool)
+                    clean_expr
                 ));
             }
 
@@ -260,6 +293,7 @@ fn render_stmts(
 
             JsStmt::FieldSet { receiver, field, value } => {
                 let receiver_js = expr_to_js(receiver, has_super, names, pool);
+                let value_js = expr_to_js(value, has_super, names, pool);
 
                 let field_name = {
                     let has_conflict = pool.type_info.values().any(|t| {
@@ -272,18 +306,27 @@ fn render_stmts(
                     }
                 };
 
-                lines.push(format!(
-                    "{}{}.{} = {};",
-                    pad,
-                    receiver_js,
-                    field_name,
-                    expr_to_js(value, has_super, names, pool)
-                ));
+                if value_js.trim().is_empty() {
+                    lines.push(format!("{}/* Dropped empty FieldSet for {}.{} */", pad, receiver_js, field_name));
+                } else {
+                    lines.push(format!("{}{}.{} = {};", pad, receiver_js, field_name, value_js));
+                }
             }
 
             JsStmt::ArraySet { arr, idx, value } => {
-                lines.push(format!("{}{}[{}] = {};",
-                                   pad, expr_to_js(arr, has_super, names, pool), expr_to_js(idx, has_super, names, pool), expr_to_js(value, has_super, names, pool)));
+                let value_js = expr_to_js(value, has_super, names, pool);
+
+                if value_js.trim().is_empty() {
+                    lines.push(format!("{}/* Dropped empty ArraySet */", pad));
+                } else {
+                    lines.push(format!(
+                        "{}{}[{}] = {};",
+                        pad,
+                        expr_to_js(arr, has_super, names, pool),
+                        expr_to_js(idx, has_super, names, pool),
+                        value_js
+                    ));
+                }
             }
 
             JsStmt::Expr(e) => {
@@ -747,17 +790,7 @@ pub fn expr_to_js(expr: &JsExpr, has_super: bool, names: &TypeNames, pool: &Pool
             }
         }
 
-        JsExpr::ThisCtorCall { args } => {
-            if has_super {
-                String::new()
-            } else {
-                let a = args.iter()
-                    .map(|e| expr_to_js(e, has_super, names, pool))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("this.constructor({})", a)
-            }
-        }
+        JsExpr::ThisCtorCall { args } => String::new(),
 
         JsExpr::StaticCall { class, method, args } => {
             let a = args.iter().map(|e| expr_to_js(e, has_super, names, pool)).collect::<Vec<_>>().join(", ");

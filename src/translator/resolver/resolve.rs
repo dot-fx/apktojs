@@ -31,7 +31,9 @@ impl TypeNames {
 
         for ty in pool.type_info.keys() {
             if full_to_js.contains_key(ty.as_str()) { continue; }
+            if ty.starts_with('[') { continue; }
             let simple = ty.split('.').last().unwrap_or(ty);
+            let simple = simple.replace('$', "_");
 
             let final_name = if used.insert(simple.to_string()) {
                 simple.to_string()
@@ -58,6 +60,7 @@ impl TypeNames {
             .get(ty)
             .cloned()
             .unwrap_or_else(|| {
+                if ty.starts_with('[') { return "Object".to_string(); }
                 ty.split('.').last().unwrap_or(ty).to_string()
             })
     }
@@ -152,6 +155,7 @@ fn resolve_methods(js: &str, pool: &Pool) -> String {
                 let name = m.js_name.as_deref().unwrap_or(&m.method_name);
                 if name == "<init>"   { return "constructor(".to_string(); }
                 if name == "<clinit>" { return "__static_init__(".to_string(); }
+                let name = name.split('-').next().unwrap_or(name);
                 format!("{}(", name)
             }
             None => format!("_meth{}_{}", shard, idx),
@@ -200,7 +204,8 @@ fn resolve_static_methods(js: &str, pool: &Pool, names: &TypeNames) -> String {
                 match (m.class_name.split('.').last().unwrap_or(""), m.method_name.as_str()) {
                     _ => {
                         let simple = names.resolve(&m.class_name);
-                        format!("{}.{}", simple, m.method_name)
+                        let method = m.method_name.split('-').next().unwrap_or(&m.method_name);
+                        format!("{}.{}(", simple, method)
                     }
                 }
             }
@@ -224,6 +229,6 @@ fn resolve_sfields(js: &str, pool: &Pool, names: &TypeNames) -> String {
 }
 
 fn remove_getclass_stmts(js: &str) -> String {
-    let re = Regex::new(r"[ \t]*\S+\.getClass\(\);\n").unwrap();
+    let re = Regex::new(r"(?m)^[ \t]*[A-Za-z_$][A-Za-z0-9_$]*\.getClass\(\);\r?\n").unwrap();
     re.replace_all(js, "").into_owned()
 }
