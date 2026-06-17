@@ -6,6 +6,7 @@ use crate::translator::dalvik::interpreter::{JsExpr, JsStmt, RegId};
 use crate::translator::resolver::pool::Pool;
 use crate::translator::resolver::resolve::TypeNames;
 
+#[derive(Clone)]
 pub struct JsMethod {
     pub name: String,
     pub body: String,
@@ -642,28 +643,51 @@ fn emit_methods(
     is_self: bool,
     has_super: bool,
 ) {
-    let best_init: Option<&&JsMethod> = if has_super {
-        methods.iter()
-            .filter(|m| m.name == "<init>")
-            .max_by_key(|m| m.body.contains("super(") as usize)
-    } else {
-        methods.iter()
-            .filter(|m| m.name == "<init>")
-            .max_by_key(|m| m.param_count)
+    let inits: Vec<&JsMethod> = methods.iter()
+        .filter(|m| m.name == "<init>")
+        .map(|m| *m)
+        .collect();
+
+    let synthetic = inits.iter().max_by_key(|m| m.param_count).map(|m| *m);
+    let real = inits.iter().min_by_key(|m| m.param_count).map(|m| *m);
+
+    let merged_init: Option<JsMethod> = match (synthetic, real) {
+        (Some(syn), Some(real)) if syn.param_count > real.param_count => {
+            let synthetic_body = syn.body.clone();
+
+            let mut real_body = real.body.clone();
+            for i in 0..real.param_count {
+                real_body = real_body.replace(
+                    &format!("arguments[{}]", i),
+                    &format!("v{}_1", i + 1),
+                );
+            }
+
+            Some(JsMethod {
+                name: "<init>".to_string(),
+                body: format!("{}\n{}", synthetic_body, real_body),
+                defined_in: real.defined_in.clone(),
+                is_static: false,
+                param_count: syn.param_count,
+            })
+        }
+        _ => real.or(synthetic).map(|m| m.clone()),
     };
 
     let mut seen_names: HashSet<String> = HashSet::new();
-    let mut deduped: Vec<&&JsMethod> = Vec::new();
+    let mut deduped: Vec<JsMethod> = Vec::new();
 
-    for method in methods.iter().rev() {
+    if let Some(init) = merged_init {
+        seen_names.insert("<init>".to_string());
+        deduped.push(init);
+    }
+
+    for method in methods.iter().map(|m| *m) {
         if method.name == "<init>" {
-            if seen_names.insert("<init>".to_string()) {
-                if let Some(best) = best_init {
-                    deduped.push(best);
-                }
-            }
-        } else if seen_names.insert(method.name.clone()) {
-            deduped.push(method);
+            continue;
+        }
+        if seen_names.insert(method.name.clone()) {
+            deduped.push(method.clone());
         }
     }
     deduped.reverse();

@@ -157,14 +157,13 @@ impl Pool {
 
                     for m in class.methods() {
                         let method_name = m.name().to_string();
-
                         let is_static = m.access_flags().contains(AccessFlags::STATIC);
+                        let is_ctor = method_name == "<init>";
 
-                        if let Some(info) = methods.values_mut().find(|info| {
-                            info.class_name == class_name &&
-                                info.method_name == method_name
-                        }) {
-                            info.is_static = is_static;
+                        for info in methods.values_mut() {
+                            if info.class_name == class_name && info.method_name == method_name {
+                                info.is_static = is_static && !is_ctor;
+                            }
                         }
                     }
 
