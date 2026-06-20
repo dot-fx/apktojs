@@ -77,7 +77,7 @@ pub fn lift(
     }
     ctx.flush_pending_call(offset);
     let tagged = ctx.tagged;
-    let stmts  = reloop::structure_cfg(tagged);
+    let stmts  = reloop::structure_cfg(tagged, method_name);
     let stmts  = ssa::rename(stmts);
     let stmts = cleanup(stmts);
     (stmts, ctx.warnings)

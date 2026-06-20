@@ -4,7 +4,7 @@ use crate::translator::dalvik::interpreter::{cfg, BasicBlock, JsExpr, JsStmt, Ta
 
 const MAX_DEPTH: usize = 64;
 
-pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
+pub fn structure_cfg(tagged: Vec<TaggedStmt>, method_name: &str) -> Vec<JsStmt> {
     let tagged: Vec<TaggedStmt> = tagged
         .into_iter()
         .filter(|ts| {
@@ -83,7 +83,8 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>) -> Vec<JsStmt> {
         &mut HashSet::new(),
         &mut out,
         0,
-        None
+        None,
+        method_name
     );
 
     out
@@ -103,6 +104,7 @@ fn reloop(
     out:          &mut Vec<JsStmt>,
     depth:        usize,
     consumed_pred_offset: Option<i32>,
+    method_name: &str
 ){
     if depth > MAX_DEPTH { return; }
 
@@ -156,7 +158,8 @@ fn reloop(
                 &mut loop_visited,
                 &mut body,
                 depth + 1,
-                consumed_pred_offset
+                consumed_pred_offset,
+                method_name
             );
 
             if matches!(body.last(), Some(JsStmt::Continue)) {
@@ -295,14 +298,14 @@ fn reloop(
                     let mut then_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            branch_idx, join, loop_exit, current_loop,
-                           &mut then_visited, &mut then_body, depth + 1, None);
+                           &mut then_visited, &mut then_body, depth + 1, None, method_name);
                 }
 
                 let mut else_body = Vec::new();
                 let mut else_visited = visited.clone();
                 reloop(blocks, b2i, loop_headers, preds,
                        fall_idx, join, loop_exit, current_loop,
-                       &mut else_visited, &mut else_body, depth + 1, None);
+                       &mut else_visited, &mut else_body, depth + 1, None, method_name);
 
                 if !then_body.is_empty() || !else_body.is_empty() {
                     out.push(JsStmt::If {
@@ -351,7 +354,7 @@ fn reloop(
                     let mut case_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            case_start, stop, loop_exit, current_loop,
-                           &mut case_visited, &mut case_body, depth + 1, None);
+                           &mut case_visited, &mut case_body, depth + 1, None, method_name);
                     post_switch_visited.extend(case_visited);
 
                     let mut keys = target_keys[&t].clone();
@@ -369,7 +372,7 @@ fn reloop(
                     reloop(
                         blocks, b2i, loop_headers, preds,
                         default_start, switch_end, loop_exit, current_loop,
-                        &mut default_visited, &mut default_body, depth + 1, None
+                        &mut default_visited, &mut default_body, depth + 1, None, method_name
                     );
 
                     post_switch_visited.extend(default_visited);
@@ -429,11 +432,59 @@ fn find_join_relooper(
     let a_reach = forward_reachable(a_idx);
     let b_reach = forward_reachable(b_idx);
 
+    let is_sink = |o: i32| -> bool {
+        b2i.get(&o)
+            .map(|&i| cfg::block_successors(&blocks[i]).is_empty())
+            .unwrap_or(false)
+    };
+
     let mut candidates: Vec<i32> = a_reach
         .intersection(&b_reach)
         .copied()
-        .filter(|&o| o > branch_off && o <= until)
+        .filter(|&o| o > branch_off && o <= until && !is_sink(o))
         .collect();
+
+    candidates.retain(|&c| {
+        let is_bypassed = |start_idx: usize| -> bool {
+            let mut seen = HashSet::new();
+            let mut stack = vec![start_idx];
+
+            while let Some(i) = stack.pop() {
+                let Some(b) = blocks.get(i) else { continue };
+
+                if b.offset == c { continue; }
+
+                if b.offset > c || b.offset >= until {
+                    return true;
+                }
+
+                if !seen.insert(b.offset) { continue; }
+
+                for t in cfg::block_successors(b) {
+                    if t > b.offset {
+                        if let Some(&ni) = b2i.get(&t) {
+                            stack.push(ni);
+                        }
+                    } else {
+                        let header_idx = b2i.get(&t).copied().unwrap_or(blocks.len());
+                        let loop_exit_off = cfg::find_loop_end(blocks, header_idx, t, b2i);
+
+                        if loop_exit_off > c || loop_exit_off >= until {
+                            return true;
+                        }
+
+                        if let Some(&ei) = b2i.get(&loop_exit_off) {
+                            stack.push(ei);
+                        }
+                    }
+                }
+            }
+            false
+        };
+
+        !is_bypassed(a_idx) && !is_bypassed(b_idx)
+    });
+
     candidates.sort_unstable();
     candidates.into_iter().next().unwrap_or(until)
 }
