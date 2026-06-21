@@ -474,7 +474,6 @@ fn render_stmts(
 
 pub fn render_class(
     class_name: &str,
-    base_class:  &str,
     meta:        &ApkMeta,
     methods:     &[JsMethod],
     walked:      &WalkedSource,

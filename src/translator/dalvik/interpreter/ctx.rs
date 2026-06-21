@@ -31,6 +31,16 @@ impl<'a> LiftCtx<'a> {
     }
 
     fn set(&mut self, r: u8, expr: JsExpr, offset: i32) {
+        // `r` is being overwritten with a real value here, so it no longer
+        // aliases `this` -- even if it used to. Without this, `reg()`'s
+        // `this_reg` check would keep firing for `r` forever, silently
+        // substituting `this` for whatever actually got stored here next
+        // (e.g. the result of a builder call computed a few instructions
+        // earlier and reused this register number).
+        if self.this_reg == Some(r) {
+            self.this_reg = None;
+        }
+
         match &expr {
             JsExpr::Int(_) | JsExpr::Null => {
                 self.known_constants.insert(r, expr.clone());
@@ -123,6 +133,9 @@ impl<'a> LiftCtx<'a> {
             // shr/ushr by 0 is a no-op
             Insn::ShrIntLit8(d, s, 0) | Insn::UshrIntLit8(d, s, 0) => {
                 let e = self.reg(*s);
+                if self.this_reg == Some(*d) {
+                    self.this_reg = None;
+                }
                 self.regs.insert(*d, e);
             }
 
@@ -287,7 +300,7 @@ impl<'a> LiftCtx<'a> {
 
                     let recv_expr = self.reg(recv_reg);
 
-                    if matches!(recv_expr, JsExpr::This) || recv_reg == self.this_reg.unwrap_or(255) {
+                    if matches!(recv_expr, JsExpr::This) || Some(recv_reg) == self.this_reg {
                         if let Some(m) =
                             self.pool.methods.get(&(self.dex_shard, *method_idx))
                         {
@@ -479,7 +492,7 @@ impl<'a> LiftCtx<'a> {
                     // this(...) / super(...)
                     let recv_expr = self.reg(recv_reg);
 
-                    if matches!(recv_expr, JsExpr::This) || recv_reg == self.this_reg.unwrap_or(255) {
+                    if matches!(recv_expr, JsExpr::This) || Some(recv_reg) == self.this_reg {
                         if let Some(m) =
                             self.pool.methods.get(&(self.dex_shard, *method_idx))
                         {
