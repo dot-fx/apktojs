@@ -127,7 +127,7 @@ fn resolve_lambdas(js: &str, pool: &Pool) -> String {
         }
 
         format!(
-            "((...args) => new {}({}).invoke(...args))",
+            "((() => {{ const __l = new {}({}); return (...args) => __l.invoke(...args); }})())",
             ty,
             args
         )

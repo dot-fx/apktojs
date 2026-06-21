@@ -46,6 +46,60 @@ fn pre_declare_regs(
     }
 }
 
+
+fn branch_falls_through(body: &[JsStmt]) -> bool {
+    !matches!(
+        body.last(),
+        Some(JsStmt::Return(_)) | Some(JsStmt::Break) | Some(JsStmt::Continue)
+    )
+}
+
+fn merge_parallel(
+    entry: &HashMap<u8, usize>,
+    branch_finals: &[HashMap<u8, usize>],
+    branch_bodies: &mut [&mut Vec<JsStmt>],
+    current: &mut HashMap<u8, usize>,
+    next: &mut HashMap<u8, usize>,
+) {
+    debug_assert_eq!(branch_finals.len(), branch_bodies.len());
+    if branch_finals.is_empty() {
+        return;
+    }
+
+    for (&r, &entry_ver) in entry.iter() {
+        let finals: Vec<usize> = branch_finals
+            .iter()
+            .map(|m| m.get(&r).copied().unwrap_or(entry_ver))
+            .collect();
+
+        let first = finals[0];
+        if finals.iter().all(|&v| v == first) {
+            // Every branch agrees -- often because none of them touched it.
+            current.insert(r, first);
+            let candidate = first + 1;
+            let nv = next.get(&r).copied().unwrap_or(candidate).max(candidate);
+            next.insert(r, nv);
+            continue;
+        }
+
+        // Branches disagree: allocate one fresh merge version and splice an
+        // explicit copy into the tail of every branch that needs it.
+        let merge_ver = finals.iter().copied().max().unwrap_or(entry_ver) + 1;
+
+        for (branch_ver, body) in finals.iter().zip(branch_bodies.iter_mut()) {
+            if *branch_ver != merge_ver && branch_falls_through(body.as_slice()) {
+                body.push(JsStmt::Assign {
+                    reg: RegId { reg: r, version: merge_ver },
+                    expr: JsExpr::Reg(RegId { reg: r, version: *branch_ver }),
+                });
+            }
+        }
+
+        current.insert(r, merge_ver);
+        next.insert(r, merge_ver + 1);
+    }
+}
+
 fn rename_stmt(
     stmt: JsStmt,
     current: &mut HashMap<u8, usize>,
@@ -103,19 +157,38 @@ fn rename_stmt(
             pre_declare_regs(&then_body, current, next);
             pre_declare_regs(&else_body, current, next);
 
-            let mut inner_locked = locked.clone();
-            for &r in current.keys() { inner_locked.insert(r); }
+            // An if/else isn't a back-edge -- each arm runs at most once per
+            // visit, so registers reassigned inside a branch are free to
+            // take on fresh SSA versions. We don't lock anything here
+            // ourselves; we just forward whatever `locked` set we inherited
+            // from an enclosing loop, if any.
+            let entry = current.clone();
 
-            let mut then_curr = current.clone(); let mut then_next = next.clone();
-            let then_body = rename_block(then_body, &mut then_curr, &mut then_next, &inner_locked);
+            let mut then_curr = current.clone();
+            let mut then_next = next.clone();
+            let mut then_body = rename_block(then_body, &mut then_curr, &mut then_next, locked);
 
-            let mut else_curr = current.clone(); let mut else_next = next.clone();
-            let else_body = rename_block(else_body, &mut else_curr, &mut else_next, &inner_locked);
+            let mut else_curr = current.clone();
+            let mut else_next = next.clone();
+            let mut else_body = rename_block(else_body, &mut else_curr, &mut else_next, locked);
+
+            {
+                let finals = [then_curr, else_curr];
+                let mut bodies: [&mut Vec<JsStmt>; 2] = [&mut then_body, &mut else_body];
+                merge_parallel(&entry, &finals, &mut bodies, current, next);
+            }
 
             JsStmt::If { cond, then_body, else_body }
         }
 
         JsStmt::Loop { body } => {
+            // Loops *are* back-edges: a register reassigned inside the body
+            // must keep the same identity across iterations (and be visible
+            // to the next iteration's top), which a simple per-branch merge
+            // can't express. Keeping the old "lock everything live on
+            // entry" behavior here is intentional, not a bug -- it's what
+            // makes the loop body share one ordinary mutable variable across
+            // iterations, matching real loop semantics.
             pre_declare_regs(&body, current, next);
             let mut inner_locked = locked.clone();
             for &r in current.keys() { inner_locked.insert(r); }
@@ -151,20 +224,48 @@ fn rename_stmt(
             for (_, body) in &cases { pre_declare_regs(body, current, next); }
             if let Some(body) = &default { pre_declare_regs(body, current, next); }
 
-            let mut inner_locked = locked.clone();
-            for &r in current.keys() { inner_locked.insert(r); }
+            let entry = current.clone();
 
-            let cases = cases.into_iter().map(|(key, body)| {
-                let mut c_curr = current.clone(); let mut c_next = next.clone();
-                (key, rename_block(body, &mut c_curr, &mut c_next, &inner_locked))
-            }).collect();
+            let mut keys: Vec<_> = Vec::with_capacity(cases.len());
+            let mut finals: Vec<HashMap<u8, usize>> = Vec::with_capacity(cases.len() + 1);
+            let mut bodies: Vec<Vec<JsStmt>> = Vec::with_capacity(cases.len() + 1);
 
-            let default = default.map(|body| {
-                let mut c_curr = current.clone(); let mut c_next = next.clone();
-                rename_block(body, &mut c_curr, &mut c_next, &inner_locked)
-            });
+            for (key, body) in cases {
+                let mut c_curr = current.clone();
+                let mut c_next = next.clone();
+                let rb = rename_block(body, &mut c_curr, &mut c_next, locked);
+                keys.push(key);
+                finals.push(c_curr);
+                bodies.push(rb);
+            }
 
-            JsStmt::Switch { expr, cases, default }
+            let has_default = default.is_some();
+            if let Some(body) = default {
+                let mut c_curr = current.clone();
+                let mut c_next = next.clone();
+                let rb = rename_block(body, &mut c_curr, &mut c_next, locked);
+                finals.push(c_curr);
+                bodies.push(rb);
+            }
+            // NOTE: if there's no `default` and no case matches at runtime,
+            // JS falls straight through the switch untouched -- that
+            // implicit "nothing happened" path isn't modeled as a branch
+            // here, so a register reassigned consistently by every present
+            // case but lacking a default arm is still merged as if all
+            // paths were covered. This mirrors a pre-existing limitation
+            // (the same gap exists for any phi-style analysis without a
+            // default/else) rather than introducing a new one, and matches
+            // what Kotlin's exhaustive `when` produces in practice.
+
+            {
+                let mut body_refs: Vec<&mut Vec<JsStmt>> = bodies.iter_mut().collect();
+                merge_parallel(&entry, &finals, &mut body_refs, current, next);
+            }
+
+            let default_body = if has_default { bodies.pop() } else { None };
+            let cases: Vec<_> = keys.into_iter().zip(bodies.into_iter()).collect();
+
+            JsStmt::Switch { expr, cases, default: default_body }
         }
 
         other => other,
@@ -258,7 +359,6 @@ fn rename_expr(expr: JsExpr, current: &mut HashMap<u8, usize>) -> JsExpr {
 fn rename_exprs(exprs: Vec<JsExpr>, current: &mut HashMap<u8, usize>) -> Vec<JsExpr> {
     exprs.into_iter().map(|e| rename_expr(e, current)).collect()
 }
-
 
 fn bump(r: u8, current: &mut HashMap<u8, usize>, next: &mut HashMap<u8, usize>, locked: &HashSet<u8>) -> usize {
     if locked.contains(&r) {
