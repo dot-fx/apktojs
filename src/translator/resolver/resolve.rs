@@ -59,8 +59,14 @@ impl TypeNames {
             .get(ty)
             .cloned()
             .unwrap_or_else(|| {
-                if ty.starts_with('[') { return "Object".to_string(); }
-                ty.split('.').last().unwrap_or(ty).to_string()
+                if ty.starts_with('[') {
+                    return "Object".to_string();
+                }
+
+                ty.split('.')
+                    .last()
+                    .unwrap_or(ty)
+                    .replace('$', "_")
             })
     }
 }
