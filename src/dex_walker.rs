@@ -3,6 +3,7 @@ use crate::apk_inspector::ApkMeta;
 use crate::dex_extractor::ExtractedDex;
 use crate::translator::dalvik::decode;
 use crate::translator::dalvik::insn::Insn;
+use crate::translator::resolver::mappings::from_dex_type;
 use crate::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.
@@ -168,7 +169,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
         let mut found_any = false;
 
         for desc in referenced_descs {
-            let fq = from_dex_descriptor(&desc);
+            let fq = from_dex_type(&desc);
             if fq.starts_with("java.")
                 || fq.starts_with("kotlin.")
                 || fq.starts_with("android.")
@@ -241,9 +242,8 @@ fn find_factory_sources(
 
             if desc.is_empty() { continue; }
 
-            let fq = from_dex_descriptor(&desc);
+            let fq = from_dex_type(&desc);
 
-            // Skip framework/stdlib classes
             if fq.starts_with("java.")
                 || fq.starts_with("kotlin.")
                 || fq.starts_with("android.")
@@ -252,7 +252,6 @@ fn find_factory_sources(
                 continue;
             }
 
-            // Accept anything else instantiated in createSources
             if !descriptors.contains(&desc) {
                 descriptors.push(desc);
             }
@@ -272,12 +271,6 @@ fn resolve_ext_class(package: &str, ext_class: &str) -> String {
 
 fn to_dex_descriptor(fq: &str) -> String {
     format!("L{};", fq.replace('.', "/"))
-}
-
-fn from_dex_descriptor(desc: &str) -> String {
-    desc.trim_start_matches('L')
-        .trim_end_matches(';')
-        .replace('/', ".")
 }
 
 fn find_class_in_shards<'a>(
@@ -316,7 +309,7 @@ fn detect_kind(
     }
 
     Err(WalkError::NotASource(
-        from_dex_descriptor(&class.jtype().to_string())
+        from_dex_type(&class.jtype().to_string())
     ))
 }
 
@@ -370,7 +363,7 @@ fn walk_hierarchy(
         return;
     }
 
-    let class_name = from_dex_descriptor(&class.jtype().to_string());
+    let class_name = from_dex_type(&class.jtype().to_string());
 
     if class_name.starts_with("java.")
         || class_name.starts_with("kotlin.")
@@ -389,7 +382,7 @@ fn walk_hierarchy(
     let resolved_super = class
         .super_class()
         .and_then(|id| resolve_type_across_shards(id, shard, all_shards))
-        .map(|t| from_dex_descriptor(&t))
+        .map(|t| from_dex_type(&t))
         .filter(|s| !s.is_empty() && s != "java.lang.Object");
 
     let entry = pool.type_info

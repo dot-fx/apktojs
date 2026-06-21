@@ -85,7 +85,13 @@ impl<'a> LiftCtx<'a> {
         self.pool
             .types
             .get(&(self.dex_shard, idx))
-            .map(|s| s.trim_start_matches('[').to_string())
+            .map(|s| {
+                s.trim_start_matches('[')
+                    .split('.')
+                    .last()
+                    .unwrap_or(s)
+                    .to_string()
+            })
             .unwrap_or_else(|| format!("Type{}", idx))
     }
 
@@ -100,13 +106,7 @@ impl<'a> LiftCtx<'a> {
     fn method_ref(&self, mi: u32) -> String {
         self.pool.methods
             .get(&(self.dex_shard, mi))
-            .map(|m| {
-                if let Some(js) = &m.js_name {
-                    js.clone()
-                } else {
-                    format!("_meth{}_{}", self.dex_shard, mi)
-                }
-            })
+            .map(|m| m.method_name.clone())
             .unwrap_or_else(|| format!("_meth{}_{}", self.dex_shard, mi))
     }
 

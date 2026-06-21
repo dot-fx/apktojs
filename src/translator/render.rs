@@ -158,8 +158,7 @@ fn strip_dead_code(stmts: &[JsStmt]) -> Vec<JsStmt> {
         ) || matches!(stmt, JsStmt::Expr(JsExpr::Raw(s)) if s.starts_with("throw"))
             || matches!(stmt, JsStmt::Expr(JsExpr::StaticCall { method, .. }) if method == "throw")
             || matches!(stmt, JsStmt::Throw)
-            || matches!(stmt, JsStmt::Expr(JsExpr::UnaryOp { op, .. }) if *op == "throw ")
-            || matches!(stmt, JsStmt::Throw);
+            || matches!(stmt, JsStmt::Expr(JsExpr::UnaryOp { op, .. }) if *op == "throw ");
 
         let stmt = match stmt {
             JsStmt::If {
@@ -536,12 +535,6 @@ pub fn render_class(
                 }
             }
         }
-
-        let mut missing_fields: Vec<String> = read_fields
-            .into_iter()
-            .filter(|f| !assigned_fields.contains(f) && f.ends_with("_val"))
-            .collect();
-        missing_fields.sort();
 
         let simple = names.resolve(&*owner);
         let super_name: Option<&str> = pool.type_info

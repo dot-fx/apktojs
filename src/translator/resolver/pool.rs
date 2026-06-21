@@ -4,7 +4,6 @@ use dex::Dex;
 use dex::method::AccessFlags;
 use crate::translator::resolver::mappings::{
     from_dex_type,
-    well_known_method,
 };
 
 #[derive(Clone)]
@@ -109,14 +108,12 @@ impl Pool {
                         .map(|s| s.to_string())
                         .unwrap_or_default();
 
-                    let js_name = well_known_method(&class_name, &method_name);
-
                     methods.insert(
                         (shard_idx, meth_idx as u32),
                         MethodInfo {
                             class_name: class_name.clone(),
                             method_name: method_name.clone(),
-                            js_name,
+                            js_name: None,
                             is_static: false
                         },
                     );

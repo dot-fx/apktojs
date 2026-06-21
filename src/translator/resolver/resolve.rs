@@ -1,7 +1,6 @@
 use regex::Regex;
-use crate::translator::resolver::cleanup::{collapse_companion_chains, remove_duplicate_stmts, remove_serializers_module_stmts};
 use crate::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
-use crate::translator::resolver::mappings::{apply_well_known, kotlin_class_to_js};
+use crate::translator::resolver::mappings::{kotlin_class_to_js};
 use crate::translator::resolver::pool::Pool;
 
 use std::collections::{HashMap, HashSet};
@@ -69,7 +68,6 @@ impl TypeNames {
 pub fn resolve(raw_js: &str, pool: &Pool, names: &TypeNames) -> String {
     let mut js = raw_js.to_string();
 
-    js = apply_well_known(&js);
     js = resolve_strings(&js, &pool);
     js = resolve_static_methods(&js, &pool, &names);
     js = resolve_fields(&js, &pool);
@@ -78,9 +76,6 @@ pub fn resolve(raw_js: &str, pool: &Pool, names: &TypeNames) -> String {
     js = resolve_types(&js, &pool, &names);
     js = resolve_lambdas(&js, &pool);
     js = remove_getclass_stmts(&js);
-    js = remove_serializers_module_stmts(&js);
-    js = collapse_companion_chains(&js);
-    js = remove_duplicate_stmts(&js);
 
     js
 }
@@ -152,7 +147,8 @@ fn resolve_methods(js: &str, pool: &Pool) -> String {
         let idx: u32     = caps[2].parse().unwrap_or(u32::MAX);
         match pool.methods.get(&(shard, idx)) {
             Some(m) => {
-                let name = m.js_name.as_deref().unwrap_or(&m.method_name);
+                //let name = m.js_name.as_deref().unwrap_or(&m.method_name);
+                let name = &m.method_name;
                 if name == "<init>"   { return "constructor(".to_string(); }
                 if name == "<clinit>" { return "__static_init__(".to_string(); }
                 let name = name.split('-').next().unwrap_or(name);
@@ -198,9 +194,9 @@ fn resolve_static_methods(js: &str, pool: &Pool, names: &TypeNames) -> String {
         let idx: u32 = caps[1].parse().unwrap_or(u32::MAX);
         match lookup_method(pool, idx) {
             Some(m) => {
-                if let Some(js_name) = &m.js_name {
-                    return js_name.clone();
-                }
+                //if let Some(js_name) = &m.js_name { js_name not populated anymore
+                //    return js_name.clone();
+                //}
                 match (m.class_name.split('.').last().unwrap_or(""), m.method_name.as_str()) {
                     _ => {
                         let simple = names.resolve(&m.class_name);
