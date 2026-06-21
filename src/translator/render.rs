@@ -647,31 +647,9 @@ fn emit_methods(
         .map(|m| *m)
         .collect();
 
-    let synthetic = inits.iter().max_by_key(|m| m.param_count).map(|m| *m);
-    let real = inits.iter().min_by_key(|m| m.param_count).map(|m| *m);
-
-    let merged_init: Option<JsMethod> = match (synthetic, real) {
-        (Some(syn), Some(real)) if syn.param_count > real.param_count => {
-            let synthetic_body = syn.body.clone();
-
-            let mut real_body = real.body.clone();
-            for i in 0..real.param_count {
-                real_body = real_body.replace(
-                    &format!("arguments[{}]", i),
-                    &format!("v{}_1", i + 1),
-                );
-            }
-
-            Some(JsMethod {
-                name: "<init>".to_string(),
-                body: format!("{}\n{}", synthetic_body, real_body),
-                defined_in: real.defined_in.clone(),
-                is_static: false,
-                param_count: syn.param_count,
-            })
-        }
-        _ => real.or(synthetic).map(|m| m.clone()),
-    };
+    let merged_init: Option<JsMethod> = inits.iter()
+        .max_by_key(|m| m.param_count)
+        .map(|m| (*m).clone());
 
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut deduped: Vec<JsMethod> = Vec::new();

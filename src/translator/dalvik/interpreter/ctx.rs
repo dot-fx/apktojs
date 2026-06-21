@@ -31,12 +31,6 @@ impl<'a> LiftCtx<'a> {
     }
 
     fn set(&mut self, r: u8, expr: JsExpr, offset: i32) {
-        // `r` is being overwritten with a real value here, so it no longer
-        // aliases `this` -- even if it used to. Without this, `reg()`'s
-        // `this_reg` check would keep firing for `r` forever, silently
-        // substituting `this` for whatever actually got stored here next
-        // (e.g. the result of a builder call computed a few instructions
-        // earlier and reused this register number).
         if self.this_reg == Some(r) {
             self.this_reg = None;
         }
@@ -805,17 +799,16 @@ impl<'a> LiftCtx<'a> {
                     args: vec![JsExpr::BinOp { op: "-", left: Box::new(ae), right: Box::new(be) }]
                 }, off);
             }
-            // Replace the old Insn::Throw in ctx.rs with this:
+
             Insn::Throw(r) => {
                 let e = self.reg(*r);
-                // Use UnaryOp so SSA can traverse and rename the register
                 self.push(off, JsStmt::Expr(JsExpr::UnaryOp { op: "throw ", expr: Box::new(e) }));
             }
 
             Insn::FillArrayData(arr, _) => {
                 let ae = self.reg(*arr);
                 self.push(off, JsStmt::Comment(
-                    format!("// fill_array_data({}) /* TODO */", render_expr(&ae))
+                    format!("// fill_array_data({:?}) /* TODO */", ae)
                 ));
             }
 
@@ -827,7 +820,9 @@ impl<'a> LiftCtx<'a> {
 
             #[allow(unreachable_patterns)]
             _ => {
-                self.push(off, JsStmt::Comment("// unhandled insn".into()));
+                let msg = format!("// unhandled insn: {:?}", insn);
+                self.warn(format!("method {}: {}", self.method_name, msg));
+                self.push(off, JsStmt::Comment(msg));
             }
         }
     }
@@ -894,33 +889,5 @@ impl<'a> LiftCtx<'a> {
             cond:   JsExpr::BinOp { op, left: Box::new(e), right: Box::new(JsExpr::Int(0)) },
             target: off + rel,
         });
-    }
-}
-
-fn render_expr(expr: &JsExpr) -> String {
-    match expr {
-        JsExpr::Null => "null".into(),
-        JsExpr::Bool(b) => b.to_string(),
-        JsExpr::Int(n) => n.to_string(),
-        JsExpr::Float(f) => f.to_string(),
-        JsExpr::Str(s) => format!("\"{}\"", s),
-        JsExpr::Reg(r) => format!("v{}_{}", r.reg, r.version),
-        JsExpr::This => "this".into(),
-        JsExpr::Raw(s) => s.clone(),
-        JsExpr::BitMask { expr, mask } => format!("({} {})", render_expr(expr), mask),
-        JsExpr::BinOp { op, left, right } => format!("({} {} {})", render_expr(left), op, render_expr(right)),
-        JsExpr::UnaryOp { op, expr } => format!("{}{}", op, render_expr(expr)),
-        JsExpr::Index { arr, idx } => format!("{}[{}]", render_expr(arr), render_expr(idx)),
-        JsExpr::FieldGet { receiver, field } => format!("{}.{}", render_expr(receiver), field),
-        JsExpr::ArrayLiteral(items) => format!(
-            "[{}]",
-            items.iter().map(render_expr).collect::<Vec<_>>().join(", ")
-        ),
-        JsExpr::StringConcat(items) => items
-            .iter()
-            .map(|e| format!("String({})", render_expr(e)))
-            .collect::<Vec<_>>()
-            .join(" + "),
-        _ => "/* ... */".into(),
     }
 }
