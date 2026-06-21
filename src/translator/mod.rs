@@ -4,11 +4,10 @@ mod inline;
 mod remap;
 pub mod render;
 
-use std::collections::HashMap;
 use crate::apk_inspector::ApkMeta;
-use crate::dex_walker::{EntryKind, WalkedSource};
-use crate::translator::dalvik::interpreter::{lift, JsExpr, JsStmt, RegId};
-use crate::translator::remap::{max_reg_in_stmts, remap_stmts};
+use crate::dex_walker::WalkedSource;
+use crate::translator::dalvik::interpreter::{lift, JsStmt};
+use crate::translator::inline::inline_bridge_ctors;
 use crate::translator::resolver::infer::{rename_source_classes, InferCtx};
 use crate::translator::resolver::pool::Pool;
 
@@ -63,69 +62,7 @@ pub fn translate(
         ));
     }
 
-    let zero_inits: HashMap<String, Vec<JsStmt>> = lifted.iter()
-        .filter(|(_, name, _, _, ins_size)| name == "<init>" && *ins_size == 1)
-        .map(|(stmts, _, defined_in, _, _)| (defined_in.clone(), stmts.clone()))
-        .collect();
-
-    for (stmts, name, defined_in, _, _) in &mut lifted {
-        if name != "<init>" { continue; }
-        let Some(zero_stmts) = zero_inits.get(defined_in) else { continue; };
-        if zero_stmts.is_empty() { continue; }
-
-        let Some(pos) = stmts.iter().position(|s| {
-            matches!(s, JsStmt::Expr(JsExpr::ThisCtorCall { .. }))
-        }) else { continue; };
-
-        let ctor_args = match &stmts[pos] {
-            JsStmt::Expr(JsExpr::ThisCtorCall { args }) => args.clone(),
-            _ => unreachable!(),
-        };
-
-        let offset = max_reg_in_stmts(stmts) + 1;
-        let mut remapped = remap_stmts(zero_stmts.clone(), offset);
-
-        let mut param_assigns: Vec<(RegId, usize)> = Vec::new();
-        {
-            let mut arg_idx = 0;
-            for s in &remapped {
-                match s {
-                    JsStmt::Assign { reg, expr: JsExpr::Raw(raw) }
-                    if raw.starts_with("arguments[") =>
-                        {
-                            param_assigns.push((reg.clone(), arg_idx));
-                            arg_idx += 1;
-                        }
-                    _ => break,
-                }
-            }
-        }
-
-        let n_params = param_assigns.len();
-        remapped.drain(..n_params);
-
-        if matches!(remapped.last(), Some(JsStmt::Return(None))) {
-            remapped.pop();
-        }
-
-        let mut bridge_assigns: Vec<JsStmt> = param_assigns
-            .into_iter()
-            .zip(ctor_args.into_iter())
-            .map(|((reg, _), arg_expr)| JsStmt::Assign {
-                reg,
-                expr: arg_expr,
-            })
-            .collect();
-
-        bridge_assigns.extend(remapped);
-
-        if pos > 0 && matches!(stmts.get(pos - 1), Some(JsStmt::Return(None))) {
-            stmts.remove(pos - 1);
-            stmts.splice((pos - 1)..=(pos - 1), bridge_assigns);
-        } else {
-            stmts.splice(pos..=pos, bridge_assigns);
-        }
-    }
+    inline_bridge_ctors(&mut lifted);
 
     let mut pool_mut = pool.clone();
     let mut infer_ctx = InferCtx::default();
@@ -171,7 +108,7 @@ pub fn translate(
             param_count: (*ins_size as usize).saturating_sub(if *is_static { 0 } else { 1 }),
         });
     }
-    
+
     for js_method in &mut js_methods {
         if let Some(new_name) = renames.get(&js_method.defined_in) {
             js_method.defined_in = new_name.clone();
