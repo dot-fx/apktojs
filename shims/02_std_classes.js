@@ -63,11 +63,28 @@ globalThis.StringsKt = {
 
     split$default(str, delimiters, ignoreCase, limit, mask, marker) {
         if (str == null) return _makeKotlinList([]);
-        const sep = Array.isArray(delimiters) ? delimiters[0] : delimiters;
-        const parts = str.split(sep);
-        const result = (limit && limit > 0) ? parts.slice(0, limit) : parts;
+        if ((mask & 2) !== 0) ignoreCase = false;
+        if ((mask & 4) !== 0) limit = 0;
+        const seps = Array.isArray(delimiters) ? delimiters : [delimiters];
+        const lim = (limit && limit > 0) ? limit : Infinity;
+        const escaped = seps.map(s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const re = new RegExp(escaped.join('|'), ignoreCase ? 'i' : '');
+        const result = [];
+        let rest = str;
+        while (result.length < lim - 1) {
+            const m = rest.match(re);
+            if (!m) break;
+            result.push(rest.slice(0, m.index));
+            rest = rest.slice(m.index + m[0].length);
+        }
+        result.push(rest);
         return _makeKotlinList(result);
     },
+
+    split(str, delimiters, ignoreCase, limit) {
+        return this.split$default(str, delimiters, ignoreCase, limit, 0, null);
+    },
+
     substringBeforeLast$default(str, delimiter, missingDelimiterValue, mask, marker) {
         if (str == null) return str;
 
@@ -84,50 +101,73 @@ globalThis.StringsKt = {
         return String(str).substring(0, idx);
     },
 
+    substringBeforeLast(str, delimiter, missingDelimiterValue) {
+        if (str == null) return str;
+        const idx = String(str).lastIndexOf(String(delimiter));
+        if (idx < 0) return missingDelimiterValue !== undefined ? missingDelimiterValue : str;
+        return String(str).substring(0, idx);
+    },
+
     trimStart(str) {
         if (str == null) return str;
         return String(str).replace(/^\s+/, "");
     },
 
-    startsWith(str, prefix, startIndex = 0) {
+    trimEnd(str) {
+        if (str == null) return str;
+        return String(str).replace(/\s+$/, "");
+    },
+
+    startsWith(str, prefix, startIndex, ignoreCase) {
+        if (str == null) return 0;
+        startIndex = startIndex || 0;
+        if (ignoreCase) {
+            return str.slice(startIndex).toLowerCase().startsWith(String(prefix).toLowerCase()) ? 1 : 0;
+        }
         return str.startsWith(prefix, startIndex) ? 1 : 0;
     },
 
     "substringAfterLast$default"(str, delimiter, missingDelimiterValue, mask, marker) {
-        if (mask & 2) missingDelimiterValue = str;
+        if (str == null) return str;
+        if ((mask & 2) !== 0) missingDelimiterValue = str;
         const idx = str.lastIndexOf(delimiter);
         return idx === -1 ? missingDelimiterValue : str.slice(idx + delimiter.length);
     },
     substringAfterLast(str, delimiter, missingDelimiterValue) {
+        if (str == null) return str;
         if (missingDelimiterValue === undefined) missingDelimiterValue = str;
         const idx = str.lastIndexOf(delimiter);
         return idx === -1 ? missingDelimiterValue : str.slice(idx + delimiter.length);
     },
 
     startsWith$default(str, prefix, ignoreCase, mask, marker) {
-        if ((mask & 4) !== 0) {
+        if (str == null) return 0;
+        // ignoreCase is the only optional param (index 1) -> bit 1<<1 = 2,
+        // not 4 (mirrors substringBefore$default / replace$default pattern).
+        if ((mask & 2) !== 0) {
             ignoreCase = 0;
         }
 
-        const isCaseIgnored = ignoreCase !== 0;
+        const isCaseIgnored = !!ignoreCase;
 
         if (isCaseIgnored) {
-            return str.toLowerCase().startsWith(prefix.toLowerCase()) ? 1 : 0;
+            return str.toLowerCase().startsWith(String(prefix).toLowerCase()) ? 1 : 0;
         } else {
             return str.startsWith(prefix) ? 1 : 0;
         }
     },
 
     endsWith(str, suffix, ignoreCase = false) {
+        if (str == null) return 0;
         if (ignoreCase) {
-            return str.toLowerCase().endsWith(suffix.toLowerCase()) ? 1 : 0;
+            return str.toLowerCase().endsWith(String(suffix).toLowerCase()) ? 1 : 0;
         }
         return str.endsWith(suffix) ? 1 : 0;
     },
 
     contains$default(str, other, ignoreCase, mask, marker) {
         if (str == null) return 0;
-        if (mask & 1) ignoreCase = false;
+        if ((mask & 2) !== 0) ignoreCase = false;
         if (ignoreCase) {
             return str.toLowerCase().includes(String(other).toLowerCase()) ? 1 : 0;
         }
@@ -136,6 +176,7 @@ globalThis.StringsKt = {
 
     replaceFirst$default(str, oldValue, newValue, ignoreCase, mask, marker) {
         if (str == null) return str;
+        if ((mask & 4) !== 0) ignoreCase = false;
         if (ignoreCase) {
             const escapedOld = String(oldValue).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             return str.replace(new RegExp(escapedOld, 'i'), newValue);
@@ -143,26 +184,68 @@ globalThis.StringsKt = {
         return str.replace(oldValue, newValue);
     },
 
+    replaceFirst(str, oldValue, newValue, ignoreCase) {
+        return this.replaceFirst$default(str, oldValue, newValue, ignoreCase, 0, null);
+    },
+
     isBlank(str) {
         return (str == null || typeof str !== "string" || str.trim().length === 0) ? 1 : 0;
     },
 
-    toIntOrNull(str) {
-        if (str == null || typeof str !== "string") return 0;
+    isNotBlank(str) {
+        return this.isBlank(str) ? 0 : 1;
+    },
+
+    isEmpty(str) {
+        return (str == null || str.length === 0) ? 1 : 0;
+    },
+
+    isNotEmpty(str) {
+        return (str != null && str.length > 0) ? 1 : 0;
+    },
+
+    toIntOrNull(str, radix) {
+        if (str == null || typeof str !== "string") return null;
+        radix = radix || 10;
         const s = str.trim();
-        if (/^[+-]?\d+$/.test(s)) {
-            const n = parseInt(s, 10);
-            return {
-                _value: n,
-                intValue() { return n; },
-                longValue() { return n; },
-                floatValue() { return n; },
-                doubleValue() { return n; },
-                toString() { return String(n); },
-                valueOf() { return n; },
-            };
+        if (s === "" || s === "+" || s === "-") return null;
+
+        const body = (s[0] === '+' || s[0] === '-') ? s.slice(1) : s;
+        if (body === "") return null;
+
+        const digits = "0123456789abcdefghijklmnopqrstuvwxyz".slice(0, radix);
+        for (const ch of body.toLowerCase()) {
+            if (!digits.includes(ch)) return null;
         }
-        return 0;
+
+        const n = parseInt(s, radix);
+        if (Number.isNaN(n)) return null;
+
+        return {
+            _value: n,
+            intValue() { return n; },
+            longValue() { return n; },
+            floatValue() { return n; },
+            doubleValue() { return n; },
+            toString() { return String(n); },
+            valueOf() { return n; },
+        };
+    },
+
+    toDoubleOrNull(str) {
+        if (str == null || typeof str !== "string") return null;
+        const s = str.trim();
+        if (s === "" || Number.isNaN(Number(s))) return null;
+        const n = Number(s);
+        return {
+            _value: n,
+            intValue() { return n | 0; },
+            longValue() { return n; },
+            floatValue() { return n; },
+            doubleValue() { return n; },
+            toString() { return String(n); },
+            valueOf() { return n; },
+        };
     },
 
     removeSuffix(str, suffix) {
@@ -170,7 +253,13 @@ globalThis.StringsKt = {
         return str.endsWith(suffix) ? str.slice(0, -suffix.length) : str;
     },
 
+    removePrefix(str, prefix) {
+        if (str == null) return str;
+        return str.startsWith(prefix) ? str.slice(prefix.length) : str;
+    },
+
     substringBefore$default(str, delimiter, missingDelimiterValue, mask, marker) {
+        if (str == null) return str;
         if (mask & 2) {
             missingDelimiterValue = str;
         }
@@ -182,11 +271,20 @@ globalThis.StringsKt = {
             : str.slice(0, idx);
     },
 
+    substringBefore(str, delimiter, missingDelimiterValue) {
+        if (str == null) return str;
+        const idx = str.indexOf(delimiter);
+        return idx === -1
+            ? (missingDelimiterValue !== undefined ? missingDelimiterValue : str)
+            : str.slice(0, idx);
+    },
+
     endsWith$default(str, suffix, ignoreCase, mask, marker) {
         if (str == null) return 0;
+        if ((mask & 2) !== 0) ignoreCase = false;
         let result = false;
         if (ignoreCase) {
-            result = str.toLowerCase().endsWith(suffix.toLowerCase());
+            result = str.toLowerCase().endsWith(String(suffix).toLowerCase());
         } else {
             result = str.endsWith(suffix);
         }
@@ -210,6 +308,10 @@ globalThis.StringsKt = {
         }
 
         return str.split(oldValue).join(newValue);
+    },
+
+    replace(str, oldValue, newValue, ignoreCase) {
+        return this.replace$default(str, oldValue, newValue, ignoreCase, 0, null);
     },
 
     trim(str) {
@@ -254,6 +356,35 @@ globalThis.StringsKt = {
         return idx === -1
             ? (missingDelimiterValue ?? str)
             : str.slice(idx + delimiter.length);
+    },
+
+    indexOf$default(str, other, startIndex, ignoreCase, mask, marker) {
+        if (str == null) return -1;
+        if ((mask & 2) !== 0) startIndex = 0;
+        if ((mask & 4) !== 0) ignoreCase = false;
+        if (ignoreCase) {
+            return str.toLowerCase().indexOf(String(other).toLowerCase(), startIndex);
+        }
+        return str.indexOf(other, startIndex);
+    },
+
+    indexOf(str, other, startIndex, ignoreCase) {
+        return this.indexOf$default(str, other, startIndex, ignoreCase, 0, null);
+    },
+
+    lastIndexOf$default(str, other, startIndex, ignoreCase, mask, marker) {
+        if (str == null) return -1;
+        if ((mask & 2) !== 0) startIndex = str.length;
+        if ((mask & 4) !== 0) ignoreCase = false;
+        if (ignoreCase) {
+            return str.toLowerCase().lastIndexOf(String(other).toLowerCase(), startIndex);
+        }
+        return str.lastIndexOf(other, startIndex);
+    },
+
+    lastIndexOf(str, other, startIndex, ignoreCase) {
+        const si = startIndex === undefined ? str.length : startIndex;
+        return this.lastIndexOf$default(str, other, si, ignoreCase, 0, null);
     },
 };
 
