@@ -10,6 +10,17 @@ use dex_extractor::extract_dex;
 use dex_walker::walk_source;
 use translator::resolver::pool::Pool;
 
+pub const SHIMS: &str = concat!(
+    include_str!("../shims/00_prototypes.js"),
+    include_str!("../shims/01_std.js"),
+    include_str!("../shims/02_std_classes.js"),
+    include_str!("../shims/03_locale_date.js"),
+    include_str!("../shims/04_json.js"),
+    include_str!("../shims/05_android.js"),
+    include_str!("../shims/06_jsoup.js"),
+    include_str!("../shims/07_network.js"),
+);
+
 use zip::ZipArchive;
 
 #[derive(Debug, Clone)]

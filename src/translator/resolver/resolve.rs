@@ -179,16 +179,12 @@ fn resolve_fields(js: &str, pool: &Pool) -> String {
 
 fn resolve_types(js: &str, pool: &Pool, names: &TypeNames) -> String {
     let re = Regex::new(r"_type(\d+)_(\d+)").unwrap();
-
+    
     re.replace_all(js, |caps: &regex::Captures| {
         let shard: usize = caps[1].parse().unwrap_or(0);
         let idx: u32 = caps[2].parse().unwrap_or(u32::MAX);
-
         match pool.types.get(&(shard, idx)) {
-            Some(t) => {
-                names.resolve(&kotlin_class_to_js(t))
-            }
-
+            Some(t) => names.resolve(t),   // resolve the FQN directly
             None => format!("_type{}_{}", shard, idx),
         }
     }).into_owned()
