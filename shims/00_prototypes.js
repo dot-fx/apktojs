@@ -152,6 +152,18 @@ String.prototype.getBytes = function(charset) {
     return bytes;
 };
 
+String.prototype.equals = function(other) {
+    return other != null && this.valueOf() === other.valueOf();
+};
+
+String.prototype.hashCode = function() {
+    let h = 0;
+    for (let i = 0; i < this.length; i++) {
+        h = (Math.imul(31, h) + this.charCodeAt(i)) | 0;
+    }
+    return h;
+};
+
 Map.prototype.put = function(k, v) { this.set(k, v); return null; };
 Map.prototype.containsKey = function(k) { return this.has(k); };
 Map.prototype.remove = function(k) { const v = this.get(k); this.delete(k); return v ?? null; };

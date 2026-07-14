@@ -1,40 +1,6 @@
 globalThis.NetworkHelper = function NetworkHelper() { return _networkHelper; };
 
 globalThis.Request = class Request {
-    constructor(url, method, headers, body) {
-        this._url = url;
-        this._method = method ?? "GET";
-        this._headers = headers ?? new Headers();
-        this._body = body ?? null;
-    }
-    url()     { return this._url; }
-    method()  { return this._method; }
-    headers() { return this._headers; }
-    body()    { return this._body; }
-    newBuilder() { return new Request.Builder(this); }
-
-    static Builder = class RequestBuilder {
-        constructor(req) {
-            this._url     = req?._url ?? "";
-            this._method  = req?._method ?? "GET";
-            this._headers = req?._headers ?? new Headers();
-            this._body    = req?._body ?? null;
-        }
-        url(u)           { this._url = u?.toString?.() ?? u; return this; }
-        method(m, body)  { this._method = m; this._body = body; return this; }
-        header(k, v)     { this._headers.set(k, v); return this; }
-        addHeader(k, v)  { this._headers.set(k, v); return this; }
-        removeHeader(k)  { this._headers.delete(k); return this; }
-        post(body)       { this._method = "POST"; this._body = body; return this; }
-        get()            { this._method = "GET"; return this; }
-        cacheControl(c)  { return this; }
-        build() {
-            return new Request(this._url, this._method, this._headers, this._body);
-        }
-    };
-};
-
-globalThis.Request = class Request {
     constructor(url, method, headers, body, cacheControl) {
         this.url          = url?.toString?.() ?? url;
         this.method       = method ?? "GET";
