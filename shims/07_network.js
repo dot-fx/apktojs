@@ -1,3 +1,17 @@
+const _networkHelper = {
+    cookieJar: {
+        saveFromResponse(url, cookies) {
+            for (const c of cookies) _cookieStore.set(c.name, c.value);
+            state?.set?.("cookies", Object.fromEntries(_cookieStore));
+        },
+        loadForRequest(url) { return []; },
+    },
+
+    get client()             { return _makeOkHttpClient(true);  },
+    get nonCloudflareClient(){ return _makeOkHttpClient(false); },
+    get cloudflareClient()   { return _makeOkHttpClient(true);  },
+};
+
 globalThis.NetworkHelper = function NetworkHelper() { return _networkHelper; };
 
 globalThis.Request = class Request {
@@ -41,7 +55,7 @@ globalThis.Headers = class Headers {
     }
 
     get(name) {
-        return this._map[name.toLowerCase()] ?? null;
+        return this._map[name.toLowerCase()] ?? 0;
     }
 
     newBuilder() {
@@ -126,7 +140,7 @@ globalThis.HttpUrl = class HttpUrl {
     toString()   { return this._url; }
     fragment()   {
         const m = this._url.match(/#(.*)$/);
-        return m ? m[1] : null;
+        return m ? m[1] : 0;
     }
     host()       { try { return new URL(this._url).hostname; } catch { return ""; } }
     encodedPath(){ try { return new URL(this._url).pathname; } catch { return "/"; } }
@@ -134,12 +148,11 @@ globalThis.HttpUrl = class HttpUrl {
 
     queryParameter(name) {
         try {
-            return new URL(this._url).searchParams.get(name);
+            return new URL(this._url).searchParams.get(name) ?? 0;
         } catch {
-            return null;
+            return 0;
         }
     }
-
 
     pathSegments() {
         const makeList = (segs) => {
@@ -312,18 +325,7 @@ globalThis.firstInstance = function(iterator, predicate) {
         const item = iterator.next();
         if (predicate(item)) return item;
     }
-    return null;
-};
-
-globalThis.CacheControl = {
-    FORCE_NETWORK: { noCache: true },
-    FORCE_CACHE:   { onlyIfCached: true },
-
-    Builder: class CacheControlBuilder {
-        maxAge(v, unit) { return this; }
-        noCache()       { return this; }
-        build()         { return {}; }
-    },
+    return 0;
 };
 
 globalThis.CacheControl_Builder = class CacheControl_Builder {
@@ -375,6 +377,8 @@ globalThis.CacheControl_Builder = class CacheControl_Builder {
 }
 
 globalThis.CacheControl = {
+    FORCE_NETWORK: { noCache: true },
+    FORCE_CACHE:   { onlyIfCached: true },
     Builder: CacheControl_Builder,
 };
 
@@ -530,8 +534,6 @@ globalThis.ResponseBody = class ResponseBody {
     string()  { return this._text; }
 };
 
-// --- moved from 01_std.js: depends on OkHttpClient/FormBody, must load after network classes ---
-
 globalThis._cookieStore = new Map(Object.entries(state?.get?.("cookies") ?? {}));
 
 globalThis._cfStateByOrigin = new Map(Object.entries(state?.get?.("cf_state") ?? {}));
@@ -614,15 +616,12 @@ globalThis._serializeBody = function _serializeBody(body) {
     };
 }
 
-// -- moved from tachiyomi glue file --
 
 if (globalThis.HttpSource) {
     HttpSource.prototype.getNetwork = function() { return _networkHelper; };
 }
-// Also cover pre-construction access via a global fallback
 globalThis.getNetwork = () => _networkHelper;
 
-// Rate limit interceptor, no-op in sandbox
 
 globalThis.SpecificHostRateLimitInterceptorKt = {
     rateLimitHost(client, host, permits, period, unit, ...rest) {
@@ -639,7 +638,7 @@ globalThis._SandboxResponse = class _SandboxResponse {
     body()    { return new ResponseBody(this._text); }
     code()         { return this._status; }
     isSuccessful() { return this._status >= 200 && this._status < 300; }
-    header(name) { return null; }
+    header(name) { return 0; }
     async text() { return this._text; }
     async json() { return JSON.parse(this._text); }
 
@@ -647,7 +646,7 @@ globalThis._SandboxResponse = class _SandboxResponse {
         const url = this._url;
         return {
             url() { return new HttpUrl(url); },
-            header(name) { return null; },
+            header(name) { return 0; },
             method() { return "GET"; },
         };
     }

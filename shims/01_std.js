@@ -1,38 +1,19 @@
 globalThis._makeKotlinList = (arr) => {
-    arr.iterator = function() {
-        let i = 0;
-        return {
-            hasNext() { return i < arr.length ? 1 : 0; },
-            next() { return arr[i++]; }
-        };
-    };
+    if (!arr) arr = [];
+
     arr.indexOfFirst = (pred) => arr.findIndex(pred);
     arr.removeAt     = (i)    => arr.splice(i, 1)[0];
     arr.add          = (item) => { arr.push(item); return true; };
+    arr.isEmpty      = () => arr.length === 0 ? 1 : 0;
+    arr.isNotEmpty   = () => arr.length > 0 ? 1 : 0;
+
     Object.defineProperty(arr, 'size', { get: () => arr.length, configurable: true });
 
-    // Proxy to handle any obfuscated method name (e.g. .r(), .q(), .z())
-    return new Proxy(arr, {
-        get(target, prop) {
-            if (prop in target) return typeof target[prop] === 'function'
-                ? target[prop].bind(target)
-                : target[prop];
-
-            // Unknown prop — return a function that handles iterator/forEach patterns
-            if (typeof prop === 'string') {
-                return function(...args) {
-                    if (typeof args[0] === 'function') { target.forEach(args[0]); return; }
-                    if (args.length === 0)              return target; // iterator call
-                    if (typeof args[0] === 'number')    return target[args[0]]; // get(i)
-                    return target;
-                };
-            }
-        }
-    });
+    return arr;
 };
 
 globalThis._wrapKotlinObject = function _wrapKotlinObject(obj) {
-    if (obj === null || obj === undefined) return null;
+    if (obj === null || obj === undefined) return 0;
     if (Array.isArray(obj)) return obj.map(_wrapKotlinObject);
     if (typeof obj !== "object") return obj;
 
@@ -61,7 +42,7 @@ globalThis._wrapKotlinObject = function _wrapKotlinObject(obj) {
                 const arr = Array.isArray(target) ? target : Object.values(target);
                 let i = 0;
                 return {
-                    hasNext: () => i < arr.length,
+                    hasNext: () => (i < arr.length ? 1 : 0),
                     next: () => _wrapKotlinObject(arr[i++]),
                 };
             };
@@ -88,7 +69,7 @@ globalThis._wrapKotlinObject = function _wrapKotlinObject(obj) {
                 return () => _wrapKotlinObject(orderedValues[idx]);
             }
 
-            return () => null;
+            return () => 0;
         }
     });
 }

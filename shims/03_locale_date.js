@@ -5,17 +5,17 @@ globalThis.SimpleDateFormat = class SimpleDateFormat {
     }
 
     parse(str, pos) {
-        if (!str) return null;
+        if (!str) return 0;
         const trimmed = str.trim();
-        if (!trimmed) return null;
-        const patternResult = this._parseWithPattern(trimmed, this._pattern);
+        if (!trimmed) return 0;
+        const patternResult = this.parseWithPattern(trimmed, this._pattern);
         if (patternResult) {
             if (pos) pos.setIndex(str.length);
             return patternResult;
         }
         const ms = Date.parse(trimmed);
         if (pos) pos.setIndex(str.length);
-        return isNaN(ms) ? null : new Date(ms);
+        return isNaN(ms) ? 0 : new Date(ms);
     }
 
     parseWithPattern(str, pattern) {
@@ -139,13 +139,13 @@ globalThis.Regex = class Regex {
         this._flags = flags;
         this._re = new RegExp(pattern, flags);
     }
-    containsMatchIn(str)  { return this._re.test(str); }
-    matches(str)          { return new RegExp(`^(?:${this._pattern})$`).test(str); }
+    containsMatchIn(str)  { return this._re.test(str) ? 1 : 0; }
+    matches(str)  { return new RegExp(`^(?:${this._pattern})$`).test(str) ? 1 : 0; }
     find(str, start = 0)  {
         const re = new RegExp(this._pattern, "g" + this._flags.replace("g",""));
         re.lastIndex = start;
         const m = re.exec(str);
-        if (!m) return null;
+        if (!m) return 0;
         return { value: m[0], groupValues: m, destructured: { component1: () => m[1] }, getValue() { return this; }, };
     }
     findAll(str, start = 0) {
@@ -163,7 +163,7 @@ globalThis.Regex = class Regex {
     split(str)                   { return str.split(this._re); }
     toString()                   { return this._pattern; }
 
-    test(str) { return this._re.test(str); }
+    test(str) { return this._re.test(str) ? 1 : 0; }
 
     static find$default(regex, input, startIndex, flags, marker) {
         if (flags & 1) startIndex = 0;

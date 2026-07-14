@@ -65,17 +65,84 @@ globalThis.StringsKt = {
         if (str == null) return _makeKotlinList([]);
         if ((mask & 2) !== 0) ignoreCase = false;
         if ((mask & 4) !== 0) limit = 0;
-        const seps = Array.isArray(delimiters) ? delimiters : [delimiters];
+
         const lim = (limit && limit > 0) ? limit : Infinity;
-        const escaped = seps.map(s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        const re = new RegExp(escaped.join('|'), ignoreCase ? 'i' : '');
+        let seps = [];
+        if (Array.isArray(delimiters)) {
+            seps = delimiters;
+        } else if (delimiters != null) {
+            seps = [delimiters];
+        }
+
+        const escapedSeps = [];
+        for (const s of seps) {
+            if (s == null) continue;
+
+            if (s instanceof RegExp) {
+                escapedSeps.push(s.source);
+            } else if (typeof s === 'object' && (s.pattern || s.nativePattern || s.nativePattern_0)) {
+                const pat = s.pattern || s.nativePattern || s.nativePattern_0;
+                escapedSeps.push(pat instanceof RegExp ? pat.source : String(pat));
+            } else {
+                const strSep = String(s);
+                if (strSep === "") {
+                    escapedSeps.push("");
+                } else {
+                    escapedSeps.push(strSep.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                }
+            }
+        }
+
+        const non_empty = escapedSeps.filter(s => s !== "");
+        let regex;
+        if (non_empty.length > 0) {
+            regex = new RegExp(non_empty.join('|'), ignoreCase ? 'gi' : 'g');
+        } else if (escapedSeps.includes("")) {
+            regex = "";
+        } else {
+            return _makeKotlinList([str]);
+        }
+
+        if (lim === Infinity) {
+            let parts;
+            if (regex === "") {
+                parts = Array.from(str);
+            } else {
+                parts = str.split(regex);
+            }
+            return _makeKotlinList(parts);
+        }
+
         const result = [];
         let rest = str;
+
+        if (regex === "") {
+            const chars = Array.from(str);
+            if (lim < chars.length) {
+                const parts = chars.slice(0, lim - 1);
+                parts.push(chars.slice(lim - 1).join(""));
+                return _makeKotlinList(parts);
+            }
+            return _makeKotlinList(chars);
+        }
+
         while (result.length < lim - 1) {
-            const m = rest.match(re);
+            regex.lastIndex = 0;
+            const m = rest.match(regex);
             if (!m) break;
-            result.push(rest.slice(0, m.index));
-            rest = rest.slice(m.index + m[0].length);
+
+            const matchStr = m[0];
+            const matchIndex = m.index;
+
+            if (matchStr.length === 0) {
+                if (rest.length === 0) break;
+                result.push(rest.slice(0, matchIndex));
+                // Force 1-char forward progress to prevent infinite loops on zero-width matches
+                rest = rest.slice(matchIndex + 1);
+            } else {
+                result.push(rest.slice(0, matchIndex));
+                rest = rest.slice(matchIndex + matchStr.length);
+            }
         }
         result.push(rest);
         return _makeKotlinList(result);
@@ -205,21 +272,21 @@ globalThis.StringsKt = {
     },
 
     toIntOrNull(str, radix) {
-        if (str == null || typeof str !== "string") return null;
+        if (str == null || typeof str !== "string") return 0;
         radix = radix || 10;
         const s = str.trim();
-        if (s === "" || s === "+" || s === "-") return null;
+        if (s === "" || s === "+" || s === "-") return 0;
 
         const body = (s[0] === '+' || s[0] === '-') ? s.slice(1) : s;
-        if (body === "") return null;
+        if (body === "") return 0;
 
         const digits = "0123456789abcdefghijklmnopqrstuvwxyz".slice(0, radix);
         for (const ch of body.toLowerCase()) {
-            if (!digits.includes(ch)) return null;
+            if (!digits.includes(ch)) return 0;
         }
 
         const n = parseInt(s, radix);
-        if (Number.isNaN(n)) return null;
+        if (Number.isNaN(n)) return 0;
 
         return {
             _value: n,
@@ -233,9 +300,9 @@ globalThis.StringsKt = {
     },
 
     toDoubleOrNull(str) {
-        if (str == null || typeof str !== "string") return null;
+        if (str == null || typeof str !== "string") return 0;
         const s = str.trim();
-        if (s === "" || Number.isNaN(Number(s))) return null;
+        if (s === "" || Number.isNaN(Number(s))) return 0;
         const n = Number(s);
         return {
             _value: n,
@@ -401,13 +468,13 @@ globalThis.ArrayDeque = class ArrayDeque {
         }
     }
 
-    add(v)            { this._data.push(v); return true; }
+    add(v)            { this._data.push(v); return 1; }
     addLast(v)        { this._data.push(v); }
     addFirst(v)       { this._data.unshift(v); }
 
-    offer(v)          { this._data.push(v); return true; }
+    offer(v)          { this._data.push(v); return 1; }
     offerLast(v)      { return this.offer(v); }
-    offerFirst(v)     { this._data.unshift(v); return true; }
+    offerFirst(v)     { this._data.unshift(v); return 1; }
 
     push(v)           { this._data.unshift(v); }
     pop()             { return this._data.shift(); }
@@ -416,34 +483,34 @@ globalThis.ArrayDeque = class ArrayDeque {
     removeFirst()     { return this._data.shift(); }
     removeLast()      { return this._data.pop(); }
 
-    poll()            { return this._data.shift() ?? null; }
+    poll()            { return this._data.length ? this._data.shift() : 0; }
     pollFirst()       { return this.poll(); }
     pollLast() {
-        return this._data.length ? this._data.pop() : null;
+        return this._data.length ? this._data.pop() : 0;
     }
 
     getFirst()        { return this._data[0]; }
     getLast()         { return this._data[this._data.length - 1]; }
 
-    peek()            { return this._data[0] ?? null; }
+    peek()            { return this._data.length ? this._data[0] : 0; }
     peekFirst()       { return this.peek(); }
     peekLast() {
         return this._data.length
             ? this._data[this._data.length - 1]
-            : null;
+            : 0;
     }
 
     clear()           { this._data.length = 0; }
     size()            { return this._data.length; }
-    isEmpty()         { return this._data.length === 0; }
+    isEmpty()         { return this._data.length === 0 ? 1 : 0; }
 
-    contains(v)       { return this._data.includes(v); }
+    contains(v)       { return this._data.includes(v) ? 1 : 0; }
 
     iterator() {
         let i = 0;
         const arr = this._data;
         return {
-            hasNext() { return i < arr.length; },
+            hasNext() { return i < arr.length ? 1 : 0; },
             next()    { return arr[i++]; }
         };
     }
@@ -534,7 +601,7 @@ globalThis.CollectionsKt = {
                 target.add(item);
             }
         }
-        return true;
+        return 1;
     },
     randomOrNull(collection, random) {
         const arr = _unwrapCollection(collection);
@@ -567,9 +634,9 @@ globalThis.CollectionsKt = {
     mapOf:        (...args) => new LinkedHashMap(args),
     plus:         (a, b)   => [..._unwrapCollection(a), ..._unwrapCollection(b)],
     single:       (list)   => { const arr = _unwrapCollection(list); if (arr.length !== 1) throw new Error("Expected single element"); return arr[0]; },
-    firstOrNull:  (list, pred) => {
+    firstOrNull: (list, pred) => {
         const arr = _unwrapCollection(list);
-        return pred ? (arr.find(pred) ?? null) : (arr[0] ?? null);
+        return pred ? (arr.find(pred) ?? 0) : (arr[0] ?? 0);
     },
     filter:       (list, pred) => _unwrapCollection(list).filter(pred),
     map:          (list, fn)   => _unwrapCollection(list).map(fn),
@@ -581,7 +648,7 @@ globalThis.CollectionsKt = {
     createListBuilder: () => _mutableList(),
     getOrNull(collection, index) {
         const arr = _unwrapCollection(collection);
-        return (index >= 0 && index < arr.length) ? arr[index] : null;
+        return (index >= 0 && index < arr.length) ? arr[index] : 0;
     },
 
     first(collection, predicate) {
@@ -648,8 +715,12 @@ globalThis.LinkedHashMap = class LinkedHashMap extends Map {
         }
     }
 
-    get(key) { return super.get(key) ?? null; }
-    put(key, value) { this.set(key, value); return null; }
+    get(key) { return super.get(key) ?? 0; }
+    put(key, value) {
+        const prev = super.get(key) ?? 0;
+        this.set(key, value);
+        return prev;
+    }
     containsKey(key) { return this.has(key) ? 1 : 0; }
     containsValue(val) {
         for (const v of super.values()) {
@@ -754,92 +825,6 @@ globalThis.ArrayList = class ArrayList {
     get length_val() { return this._a.length; }
 };
 
-globalThis.HashSet = class HashSet {
-    constructor(iterable) {
-        this._s = new Set();
-        if (iterable) {
-            for (const item of iterable) {
-                this._s.add(item);
-            }
-        }
-    }
-
-    push(item) {
-        this._s.add(item);
-        return this;
-    }
-
-    add(item) {
-        this._s.add(item);
-        return this;
-    }
-
-    remove(item) {
-        return this._s.delete(item) ? 1 : 0;
-    }
-
-    contains(item) {
-        return this._s.has(item) ? 1 : 0;
-    }
-
-    size() {
-        return this._s.size;
-    }
-
-    isEmpty() {
-        return this._s.size === 0 ? 1 : 0;
-    }
-
-    clear() {
-        this._s.clear();
-    }
-
-    toArray() {
-        return Array.from(this._s);
-    }
-
-    forEach(fn) {
-        this._s.forEach(fn);
-    }
-
-    [Symbol.iterator]() {
-        return this._s[Symbol.iterator]();
-    }
-
-    get length_val() {
-        return this._s.size;
-    }
-
-    get size_val() {
-        return this._s.size;
-    }
-
-    addAll(items) {
-        for (const item of items) {
-            this._s.add(item);
-        }
-        return this;
-    }
-
-    removeAll(items) {
-        for (const item of items) {
-            this._s.delete(item);
-        }
-        return this;
-    }
-
-    containsAll(items) {
-        for (const item of items) {
-            if (!this._s.has(item)) return 0;
-        }
-        return 1;
-    }
-
-    toList() {
-        return Array.from(this._s);
-    }
-};
-
 globalThis.ArrayListSerializer = class ArrayListSerializer {
     constructor(elementSerializer) {
         this._elementSerializer = elementSerializer;
@@ -879,8 +864,9 @@ globalThis.LinkedHashSet = class LinkedHashSet extends Set {
     }
 
     add(value) {
+        const had = this.has(value);
         super.add(value);
-        return this;
+        return had ? 0 : 1;
     }
 
     contains(value) {
@@ -912,10 +898,11 @@ globalThis.LinkedHashSet = class LinkedHashSet extends Set {
     }
 
     addAll(collection) {
+        let changed = 0;
         for (const v of collection) {
-            this.add(v);
+            if (!this.has(v)) { super.add(v); changed = 1; }
         }
-        return this;
+        return changed;
     }
 
     clear() {
@@ -1451,9 +1438,8 @@ globalThis.RangesKt = {
 
                 return {
                     hasNext() {
-                        return i >= to ? true : 0;
+                        return i >= to ? 1 : 0;
                     },
-
                     nextInt() {
                         return i--;
                     },
@@ -1485,7 +1471,7 @@ globalThis.RangesKt = {
 
                 return {
                     hasNext() {
-                        return i < to ? true : 0;
+                        return i < to ? 1 : 0;
                     },
 
                     nextInt() {

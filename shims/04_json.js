@@ -32,13 +32,13 @@ globalThis.JsonPrimitive = class JsonPrimitive {
 // 2. Then collections
 globalThis.JsonArray = class JsonArray {
     constructor(arr) { this._arr = arr ?? []; }
-    get(i)         { return this._arr[i] ?? null; }
+    get(i)         { return this._arr[i] ?? 0; }
     [Symbol.iterator]() { return this._arr[Symbol.iterator](); }
 };
 
 globalThis.JsonObject = class JsonObject {
     constructor(map) { this._map = map ?? {}; }
-    get(key)       { return this._map[key] ?? null; }
+    get(key)       { return this._map[key] ?? 0; }
 };
 
 function deepSerialize(value) {
@@ -166,7 +166,7 @@ globalThis.StringSerializer = {
     INSTANCE: {
         deserialize(decoder) {
             const val = decoder._json;
-            if (val === null || val === undefined) return null;
+            if (val === null || val === undefined) return 0;
             return String(val);
         },
         serialize(encoder, value) { return String(value ?? ""); },
@@ -205,7 +205,7 @@ globalThis.JsonDecoder = class JsonDecoder {
     decodeNullableSerializableElement(descriptor, index, serializer, old) {
         const key = descriptor._fields[index];
         const val = this._json[key];
-        if (val === null || val === undefined) return null;
+        if (val === null || val === undefined) return 0;
         if (serializer && typeof serializer.deserialize === 'function') {
             const childDescriptor = serializer.getDescriptor?.() ?? descriptor;
             return serializer.deserialize(new JsonDecoder(val, childDescriptor));
@@ -243,7 +243,7 @@ globalThis.JsonDecoder = class JsonDecoder {
     }
     decodeStringElement(descriptor, index) {
         const key = descriptor._fields[index];
-        return this._json[key] ?? null;
+        return this._json[key] ?? 0;
     }
     decodeIntElement(descriptor, index) {
         const key = descriptor._fields[index];
@@ -251,13 +251,12 @@ globalThis.JsonDecoder = class JsonDecoder {
     }
     decodeBooleanElement(descriptor, index) {
         const key = descriptor._fields[index];
-        return this._json[key] ?? false;
+        return this._json[key] ? 1 : 0;
     }
     decodeSerializableElement(descriptor, index, serializer, old) {
         const key = descriptor._fields[index];
         const val = this._json[key];
-        if (val === undefined || val === null) return old ?? null;
-
+        if (val === undefined || val === null) return old ?? 0;
         if (serializer && typeof serializer.deserialize === 'function') {
             const childDescriptor = serializer.getDescriptor?.() ?? descriptor;
             return serializer.deserialize(new JsonDecoder(val, childDescriptor));
@@ -325,7 +324,7 @@ globalThis.BuiltinSerializersKt = {
             _elem: elementSerializer,
             deserialize(decoder) {
                 const val = decoder._json;
-                if (val === null || val === undefined) return null;
+                if (val === null || val === undefined) return 0;
                 return elementSerializer.deserialize(new JsonDecoder(val, decoder._descriptor));
             },
             getDescriptor() { return elementSerializer.getDescriptor?.() ?? null; },

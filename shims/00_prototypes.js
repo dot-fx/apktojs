@@ -9,8 +9,8 @@ if (!Array.prototype.iterator) {
         let i = 0;
         const arr = this;
         return {
-            hasNext: () => i < arr.length ? true : 0,
-            next: () => i < arr.length ? arr[i++] : 0,
+            hasNext: () => (i < arr.length ? 1 : 0),
+            next: () => arr[i++],
         };
     };
 }
