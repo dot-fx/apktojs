@@ -1,6 +1,5 @@
 use regex::Regex;
 use crate::translator::resolver::lookup::{lookup_field, lookup_method, lookup_string, lookup_type};
-use crate::translator::resolver::mappings::{kotlin_class_to_js};
 use crate::translator::resolver::pool::Pool;
 
 use std::collections::{HashMap, HashSet};

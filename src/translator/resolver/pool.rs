@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use dex::Dex;
 use dex::method::AccessFlags;
-use crate::translator::resolver::mappings::{
-    from_dex_type,
-};
-
+use crate::translator::from_dex_type;
 #[derive(Clone)]
 pub struct Pool {
     pub strings: HashMap<(usize, u32), String>,

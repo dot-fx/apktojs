@@ -82,16 +82,8 @@ impl<'a> LiftCtx<'a> {
     }
 
     fn type_ref(&self, idx: u32) -> String {
-        self.pool
-            .types
-            .get(&(self.dex_shard, idx))
-            .map(|s| {
-                s.trim_start_matches('[')
-                    .split('.')
-                    .last()
-                    .unwrap_or(s)
-                    .to_string()
-            })
+        self.pool.types.get(&(self.dex_shard, idx))
+            .cloned()
             .unwrap_or_else(|| format!("Type{}", idx))
     }
 

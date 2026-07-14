@@ -3,7 +3,7 @@ use crate::apk_inspector::ApkMeta;
 use crate::dex_extractor::ExtractedDex;
 use crate::translator::dalvik::decode;
 use crate::translator::dalvik::insn::Insn;
-use crate::translator::resolver::mappings::from_dex_type;
+use crate::translator::from_dex_type;
 use crate::translator::resolver::pool::Pool;
 
 /// DEX type descriptor for HttpSource.

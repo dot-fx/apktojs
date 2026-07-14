@@ -132,3 +132,9 @@ pub fn translate(
 
     Ok(TranslatedSource { js: resolved, warnings })
 }
+
+pub fn from_dex_type(desc: &str) -> String {
+    desc.trim_start_matches('L')
+        .trim_end_matches(';')
+        .replace('/', ".")
+}
