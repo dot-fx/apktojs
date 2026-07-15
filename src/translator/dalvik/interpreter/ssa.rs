@@ -38,11 +38,17 @@ fn pre_declare_regs(
     let mut assigned = HashSet::new();
     collect_assigned_regs(stmts, &mut assigned);
     for r in assigned {
-        if !current.contains_key(&r) {
-            let ver = *next.entry(r).or_insert(1);
-            current.insert(r, ver);
-            next.insert(r, ver + 1);
+        // Only reserve a version if this register already has a value
+        // from before the branch. If it doesn't, there's no legitimate
+        // "current" value to speak of yet -- pre-declaring one here just
+        // creates a phantom version that nothing ever assigns, and any
+        // read-before-write inside the branch would reference it.
+        // Let the branch's real first assignment claim its own version
+        // via `bump()` instead.
+        if current.contains_key(&r) {
+            continue;
         }
+        // no-op: do not insert a synthetic version for registers with no prior value
     }
 }
 
@@ -66,15 +72,43 @@ fn merge_parallel(
         return;
     }
 
-    for (&r, &entry_ver) in entry.iter() {
-        let finals: Vec<usize> = branch_finals
-            .iter()
-            .map(|m| m.get(&r).copied().unwrap_or(entry_ver))
-            .collect();
+    let mut all_regs: HashSet<u8> = HashSet::new();
+    for m in branch_finals {
+        for &r in m.keys() {
+            all_regs.insert(r);
+        }
+    }
+    for &r in entry.keys() {
+        all_regs.insert(r);
+    }
+
+    for r in all_regs {
+        let entry_ver = entry.get(&r).copied();
+
+        // Determine each branch's version for r. If a branch doesn't write
+        // r, it keeps whatever was live at entry (if any). If there's no
+        // entry value AND this branch doesn't write it, this register has
+        // no real value on this path -- bail out on merging it entirely
+        // rather than fabricating a version.
+        let mut finals: Vec<usize> = Vec::with_capacity(branch_finals.len());
+        let mut has_gap = false;
+        for m in branch_finals {
+            match m.get(&r).copied().or(entry_ver) {
+                Some(v) => finals.push(v),
+                None => { has_gap = true; break; }
+            }
+        }
+        if has_gap {
+            // Not defined on every path -- any post-merge read of this
+            // register would itself be reading something undefined in the
+            // original bytecode too (i.e. genuinely dead/unreachable on
+            // whichever path lacks it), so don't touch `current`/`next`
+            // for it. Leave it exactly as it was before this branch.
+            continue;
+        }
 
         let first = finals[0];
         if finals.iter().all(|&v| v == first) {
-            // Every branch agrees -- often because none of them touched it.
             current.insert(r, first);
             let candidate = first + 1;
             let nv = next.get(&r).copied().unwrap_or(candidate).max(candidate);
@@ -82,9 +116,7 @@ fn merge_parallel(
             continue;
         }
 
-        // Branches disagree: allocate one fresh merge version and splice an
-        // explicit copy into the tail of every branch that needs it.
-        let merge_ver = finals.iter().copied().max().unwrap_or(entry_ver) + 1;
+        let merge_ver = finals.iter().copied().max().unwrap_or(entry_ver.unwrap_or(0)) + 1;
 
         for (branch_ver, body) in finals.iter().zip(branch_bodies.iter_mut()) {
             if *branch_ver != merge_ver && branch_falls_through(body.as_slice()) {
