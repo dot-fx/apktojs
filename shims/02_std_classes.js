@@ -546,10 +546,16 @@ globalThis.CollectionsKt = {
             items = items.map(_wrapKotlinObject);
         }
 
+        const callTransform = (x) => {
+            if (typeof transform === 'function') return transform(x);
+            if (transform && typeof transform.invoke === 'function') return transform.invoke(x);
+            return String(x);
+        };
+
         let over = false;
         if (limit >= 0 && items.length > limit) { items = items.slice(0, limit); over = true; }
         const parts = items.map(x => {
-            return transform ? transform(x) : String(x);
+            return transform ? callTransform(x) : String(x);
         });
         if (over) parts.push(truncated);
         return prefix + parts.join(separator) + postfix;
@@ -867,6 +873,10 @@ globalThis.LinkedHashSet = class LinkedHashSet extends Set {
         const had = this.has(value);
         super.add(value);
         return had ? 0 : 1;
+    }
+
+    push(value) {
+        return this.add(value);
     }
 
     contains(value) {
@@ -1643,16 +1653,26 @@ globalThis.DurationUnit = {
 };
 
 globalThis.Duration = class Duration {
-    static Companion = {
-        getZERO() {
-            return 0;
-        },
+    constructor(nanos) { this._nanos = nanos; }
 
-        getINFINITE() {
-            return Number.MAX_SAFE_INTEGER;
-        }
-    };
+    toString() { return `${this._nanos}ns`; }
+    valueOf() { return this._nanos; }
+
+    ["getInWholeMilliseconds-impl"]() { return Math.trunc(this._nanos / 1e6); }
+    ["getInWholeSeconds-impl"]()      { return Math.trunc(this._nanos / 1e9); }
+    ["getInWholeMinutes-impl"]()      { return Math.trunc(this._nanos / 6e10); }
+    ["isNegative-impl"]()             { return this._nanos < 0 ? 1 : 0; }
+    ["isPositive-impl"]()             { return this._nanos > 0 ? 1 : 0; }
 };
+
+Duration.Companion = {
+    ["getZERO-UwyO8pc"]() { return new Duration(0); },
+    ["getINFINITE-UwyO8pc"]() { return new Duration(Infinity); },
+    ["milliseconds-UwyO8pc"](v) { return new Duration(v * 1e6); },
+    ["seconds-UwyO8pc"](v) { return new Duration(v * 1e9); },
+    ["minutes-UwyO8pc"](v) { return new Duration(v * 6e10); },
+};
+
 globalThis.DurationKt = {
     toDuration(value, unit) {
         return {

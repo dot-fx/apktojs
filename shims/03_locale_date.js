@@ -1,3 +1,13 @@
+const MONTHS_LONG = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+];
+
+const MONTHS_SHORT = [
+    "jan", "feb", "mar", "apr", "may", "jun",
+    "jul", "aug", "sep", "oct", "nov", "dec"
+];
+
 globalThis.SimpleDateFormat = class SimpleDateFormat {
     constructor(pattern, locale) {
         this._pattern = pattern;
