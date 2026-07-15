@@ -30,7 +30,7 @@ pub enum EntryKind {
     Factory,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct SourceMethod {
     pub name: String,
     pub defined_in: String,
@@ -38,6 +38,7 @@ pub struct SourceMethod {
     pub registers_size: u16,
     pub ins_size: u16,
     pub is_static: bool,
+    pub shard: usize,
 }
 
 #[derive(Debug)]
@@ -79,7 +80,7 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
     match kind {
         EntryKind::Direct => {
             walk_hierarchy(
-                &entry_class, shard, &extracted.dex_files,
+                &entry_class, shard, dex_shard, &extracted.dex_files,
                 &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
             );
         }
@@ -93,16 +94,16 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
             }
 
             walk_hierarchy(
-                &entry_class, shard, &extracted.dex_files,
+                &entry_class, shard, dex_shard, &extracted.dex_files,
                 &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
             );
 
             for desc in &source_descriptors {
-                if let Some((src_class, _, src_shard)) =
+                if let Some((src_class, src_idx, src_shard)) =
                     find_class_in_shards(&extracted.dex_files, desc)
                 {
                     walk_hierarchy(
-                        &src_class, src_shard, &extracted.dex_files,
+                        &src_class, src_shard, src_idx, &extracted.dex_files,
                         &mut hierarchy, &mut methods, &mut seen_names, pool, 0,
                     );
                 }
@@ -133,22 +134,16 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
                     | Insn::SPutByte(_, field_idx)
                     | Insn::SPutChar(_, field_idx)
                     | Insn::SPutShort(_, field_idx) => {
-                        for s in 0..16 {
-                            if let Some(field_info) = pool.fields.get(&(s, *field_idx)) {
-                                let desc = format!("L{};", field_info.class_name.replace('.', "/"));
-                                referenced_descs.push(desc);
-                                break;
-                            }
+                        if let Some(field_info) = pool.fields.get(&(method.shard, *field_idx)) {
+                            let desc = format!("L{};", field_info.class_name.replace('.', "/"));
+                            referenced_descs.push(desc);
                         }
                     }
                     Insn::InvokeStatic { method_idx, .. }
                     | Insn::InvokeStaticRange { method_idx, .. } => {
-                        for s in 0..16 {
-                            if let Some(m) = pool.methods.get(&(s, *method_idx)) {
-                                let desc = format!("L{};", m.class_name.replace('.', "/"));
-                                referenced_descs.push(desc);
-                                break;
-                            }
+                        if let Some(m) = pool.methods.get(&(method.shard, *method_idx)) {
+                            let desc = format!("L{};", m.class_name.replace('.', "/"));
+                            referenced_descs.push(desc);
                         }
                     }
                     Insn::NewInstance(_, idx)
@@ -180,12 +175,12 @@ pub fn walk_source(extracted: &ExtractedDex, meta: &ApkMeta, pool: &mut Pool) ->
                 continue;
             }
             helper_seen_classes.insert(fq.clone());
-            if let Some((helper_class, _, helper_shard)) =
+            if let Some((helper_class, helper_idx, helper_shard)) =
                 find_class_in_shards(&extracted.dex_files, &desc)
             {
                 let mut helper_seen = std::collections::HashSet::new();
                 walk_hierarchy(
-                    &helper_class, helper_shard, &extracted.dex_files,
+                    &helper_class, helper_shard, helper_idx, &extracted.dex_files,
                     &mut hierarchy, &mut new_methods, &mut helper_seen, pool, 0,
                 );
                 found_any = true;
@@ -352,6 +347,7 @@ fn extends_http_source(
 fn walk_hierarchy(
     class: &dex::class::Class,
     shard: &Dex<Vec<u8>>,
+    shard_idx: usize,
     all_shards: &[Dex<Vec<u8>>],
     hierarchy: &mut Vec<String>,
     methods: &mut Vec<SourceMethod>,
@@ -416,18 +412,21 @@ fn walk_hierarchy(
             registers_size,
             ins_size,
             is_static: (method.access_flags().bits() & 0x0008) != 0,
+            shard: shard_idx
         });
     }
 
     if let Some(super_id) = class.super_class() {
         if let Some(super_desc) = resolve_type_across_shards(super_id, shard, all_shards) {
             let found = find_class_in_shards(std::slice::from_ref(shard), &super_desc)
+                .map(|(c, _, s)| (c, shard_idx, s))
                 .or_else(|| find_class_in_shards(all_shards, &super_desc));
 
-            if let Some((super_class, _, super_shard)) = found {
+            if let Some((super_class, super_idx, super_shard)) = found {
                 walk_hierarchy(
                     &super_class,
                     super_shard,
+                    super_idx,
                     all_shards,
                     hierarchy,
                     methods,

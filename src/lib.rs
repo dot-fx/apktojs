@@ -31,9 +31,7 @@ pub struct TranslationResult {
 
 pub fn apk_to_js(bytes: &[u8]) -> Result<TranslationResult, ApkError> {
     let meta = apk_inspector::inspect_apk_reader(Cursor::new(bytes))?;
-
     let mut zip = ZipArchive::new(Cursor::new(bytes))?;
-
     let extracted = extract_dex(&mut zip, &meta)?;
 
     let mut pool = Pool::build(&extracted.dex_files);
@@ -44,8 +42,5 @@ pub fn apk_to_js(bytes: &[u8]) -> Result<TranslationResult, ApkError> {
     let translated = translator::translate(&walked, &meta, &pool)
         .map_err(|e| ApkError::Axml(e.to_string()))?;
 
-    Ok(TranslationResult {
-        js: translated.js,
-        meta,
-    })
+    Ok(TranslationResult { js: translated.js, meta })
 }

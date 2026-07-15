@@ -1,8 +1,10 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use crate::translator::dalvik::interpreter;
 use crate::translator::dalvik::interpreter::{cfg, BasicBlock, JsExpr, JsStmt, TaggedStmt, Terminator};
 
 const MAX_DEPTH: usize = 64;
+const MAX_EMITTED_STMTS: usize = 20_000;
 
 pub fn structure_cfg(tagged: Vec<TaggedStmt>, method_name: &str) -> Vec<JsStmt> {
     let tagged: Vec<TaggedStmt> = tagged
@@ -71,20 +73,13 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>, method_name: &str) -> Vec<JsStmt> 
 
     let preds = cfg::build_predecessors(&blocks, &b2i);
 
+    let budget = Cell::new(0usize);
+
     reloop(
-        &blocks,
-        &b2i,
-        &loop_headers,
-        &preds,
-        0,
-        i32::MAX,
-        None,
-        None,
-        &mut HashSet::new(),
-        &mut out,
-        0,
-        None,
-        method_name
+        &blocks, &b2i, &loop_headers, &preds,
+        0, i32::MAX, None, None,
+        &mut HashSet::new(), &mut out, 0, None, method_name,
+        &budget,
     );
 
     out
@@ -104,9 +99,19 @@ fn reloop(
     out:          &mut Vec<JsStmt>,
     depth:        usize,
     consumed_pred_offset: Option<i32>,
-    method_name: &str
+    method_name: &str,
+    budget: &Cell<usize>,
 ){
     if depth > MAX_DEPTH { return; }
+
+    if budget.get() > MAX_EMITTED_STMTS {
+        out.push(JsStmt::Comment(format!(
+            "[translator] structuring aborted in {}: exceeded call budget (likely join-point resolution failure)",
+            method_name
+        )));
+        return;
+    }
+    budget.set(budget.get() + 1);
 
     let mut idx = start_idx;
 
@@ -159,7 +164,8 @@ fn reloop(
                 &mut body,
                 depth + 1,
                 consumed_pred_offset,
-                method_name
+                method_name,
+                budget
             );
 
             if matches!(body.last(), Some(JsStmt::Continue)) {
@@ -298,14 +304,14 @@ fn reloop(
                     let mut then_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            branch_idx, join, loop_exit, current_loop,
-                           &mut then_visited, &mut then_body, depth + 1, None, method_name);
+                           &mut then_visited, &mut then_body, depth + 1, None, method_name, budget);
                 }
 
                 let mut else_body = Vec::new();
                 let mut else_visited = visited.clone();
                 reloop(blocks, b2i, loop_headers, preds,
                        fall_idx, join, loop_exit, current_loop,
-                       &mut else_visited, &mut else_body, depth + 1, None, method_name);
+                       &mut else_visited, &mut else_body, depth + 1, None, method_name, budget);
 
                 if !then_body.is_empty() || !else_body.is_empty() {
                     out.push(JsStmt::If {
@@ -354,7 +360,7 @@ fn reloop(
                     let mut case_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            case_start, stop, loop_exit, current_loop,
-                           &mut case_visited, &mut case_body, depth + 1, None, method_name);
+                           &mut case_visited, &mut case_body, depth + 1, None, method_name, budget);
                     post_switch_visited.extend(case_visited);
 
                     let mut keys = target_keys[&t].clone();
@@ -372,7 +378,7 @@ fn reloop(
                     reloop(
                         blocks, b2i, loop_headers, preds,
                         default_start, switch_end, loop_exit, current_loop,
-                        &mut default_visited, &mut default_body, depth + 1, None, method_name
+                        &mut default_visited, &mut default_body, depth + 1, None, method_name, budget
                     );
 
                     post_switch_visited.extend(default_visited);
