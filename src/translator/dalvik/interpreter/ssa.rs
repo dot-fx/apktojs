@@ -6,8 +6,12 @@ pub fn rename(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
     let mut current: HashMap<u8, usize> = HashMap::new();
     let mut next: HashMap<u8, usize> = HashMap::new();
     let locked: HashSet<u8> = HashSet::new();
+    // Top-level statements aren't inside any loop, so any stray `Break`
+    // here (shouldn't normally happen) has nowhere meaningful to report
+    // its state to; this collector is discarded.
+    let mut break_states: Vec<HashMap<u8, usize>> = Vec::new();
 
-    rename_block(stmts, &mut current, &mut next, &locked)
+    rename_block(stmts, &mut current, &mut next, &locked, &mut break_states)
 }
 
 fn collect_assigned_regs(stmts: &[JsStmt], out: &mut HashSet<u8>) {
@@ -54,10 +58,48 @@ fn pre_declare_regs(
 
 
 fn branch_falls_through(body: &[JsStmt]) -> bool {
-    !matches!(
-        body.last(),
-        Some(JsStmt::Return(_)) | Some(JsStmt::Break) | Some(JsStmt::Continue)
-    )
+    !stmts_always_terminate(body)
+}
+
+/// Whether every runtime path through `body` ends in `return`/`break`/
+/// `continue` -- i.e. control never falls off the end of it. This has to
+/// be recursive: checking only whether the *last statement* is literally
+/// `Return`/`Break`/`Continue` misses the extremely common case where the
+/// last statement is an `if`/`else` (or exhaustive `switch`) whose *every*
+/// arm terminates. Missing that made `merge_parallel` think such a branch
+/// "falls through" when it doesn't, causing it to compute a bogus merge
+/// version and inject a synchronizing assignment that reads a register
+/// version nothing on that path ever actually produced.
+fn stmts_always_terminate(body: &[JsStmt]) -> bool {
+    match body.last() {
+        Some(JsStmt::Return(_)) | Some(JsStmt::Break) | Some(JsStmt::Continue) => true,
+
+        // An `if` only guarantees termination if it has a real `else`
+        // (an absent/empty else is an implicit "do nothing" path that
+        // falls through) and *both* arms terminate.
+        Some(JsStmt::If { then_body, else_body, .. }) => {
+            !else_body.is_empty()
+                && stmts_always_terminate(then_body)
+                && stmts_always_terminate(else_body)
+        }
+
+        // A `switch` only guarantees termination if every case terminates
+        // AND there's a `default` (no default means "nothing matched"
+        // falls through) that also terminates.
+        Some(JsStmt::Switch { cases, default, .. }) => match default {
+            Some(default_body) => {
+                stmts_always_terminate(default_body)
+                    && cases.iter().all(|(_, case_body)| stmts_always_terminate(case_body))
+            }
+            None => false,
+        },
+
+        // `Loop`/`While`/`DoWhile` are left conservative (not treated as
+        // always-terminating) -- their own exit handling is covered
+        // separately, and getting this wrong here would only cause an
+        // unnecessary (harmless) fixup attempt, not a bogus one.
+        _ => false,
+    }
 }
 
 fn merge_parallel(
@@ -137,8 +179,20 @@ fn rename_stmt(
     current: &mut HashMap<u8, usize>,
     next: &mut HashMap<u8, usize>,
     locked: &HashSet<u8>,
+    // Every register-version snapshot at the point of a `Break` reachable
+    // from here without crossing into a nested loop's own body -- i.e.
+    // the actual set of post-loop predecessors for whichever loop
+    // encloses this statement. Populated by the `Break` case below and
+    // consumed by `JsStmt::Loop`'s handling once the whole body has been
+    // walked.
+    break_states: &mut Vec<HashMap<u8, usize>>,
 ) -> JsStmt {
     match stmt {
+        JsStmt::Break => {
+            break_states.push(current.clone());
+            JsStmt::Break
+        }
+
         JsStmt::Assign { reg, expr } => {
             let expr = rename_expr(expr, current);
             let new_ver = bump(reg.reg, current, next, locked);
@@ -198,11 +252,11 @@ fn rename_stmt(
 
             let mut then_curr = current.clone();
             let mut then_next = next.clone();
-            let mut then_body = rename_block(then_body, &mut then_curr, &mut then_next, locked);
+            let mut then_body = rename_block(then_body, &mut then_curr, &mut then_next, locked, break_states);
 
             let mut else_curr = current.clone();
             let mut else_next = next.clone();
-            let mut else_body = rename_block(else_body, &mut else_curr, &mut else_next, locked);
+            let mut else_body = rename_block(else_body, &mut else_curr, &mut else_next, locked, break_states);
 
             {
                 let finals = [then_curr, else_curr];
@@ -221,10 +275,52 @@ fn rename_stmt(
             // entry" behavior here is intentional, not a bug -- it's what
             // makes the loop body share one ordinary mutable variable across
             // iterations, matching real loop semantics.
+            //
+            // But `Loop` (unlike `While`/`DoWhile`) has no implicit
+            // condition-based exit at all -- every way out is an explicit
+            // `Break`. That means the snapshots collected below ARE the
+            // complete set of post-loop predecessors, and merging them
+            // (like `merge_parallel` already does for if/else and switch)
+            // is what correctly threads a register whose value depends on
+            // *which* break fired -- e.g. a found-vs-not-found result --
+            // through to whatever follows the loop. Previously nothing did
+            // this merge at all: `current` was just left holding whatever
+            // the final linear walk over the body happened to produce,
+            // regardless of which break actually runs at execution time.
             pre_declare_regs(&body, current, next);
             let mut inner_locked = locked.clone();
             for &r in current.keys() { inner_locked.insert(r); }
-            JsStmt::Loop { body: rename_block(body, current, next, &inner_locked) }
+
+            let entry = current.clone();
+            let mut body_curr = current.clone();
+            let mut body_next = next.clone();
+            let mut inner_breaks: Vec<HashMap<u8, usize>> = Vec::new();
+            let mut body = rename_block(body, &mut body_curr, &mut body_next, &inner_locked, &mut inner_breaks);
+
+            *next = body_next;
+
+            if inner_breaks.is_empty() {
+                // No break reaches here at all -- the loop never exits
+                // (body always returns/throws), so nothing after it is
+                // reachable. Leave `current` as the pre-loop state.
+            } else {
+                // One placeholder Vec per break, so merge_parallel has
+                // somewhere to write a synchronizing assignment when a
+                // register's version differs across exits; we then splice
+                // each placeholder's contents in right before its
+                // corresponding `Break`.
+                let mut placeholders: Vec<Vec<JsStmt>> =
+                    inner_breaks.iter().map(|_| Vec::new()).collect();
+                {
+                    let mut body_refs: Vec<&mut Vec<JsStmt>> =
+                        placeholders.iter_mut().collect();
+                    merge_parallel(&entry, &inner_breaks, &mut body_refs, current, next);
+                }
+                let mut adjustments = placeholders.into_iter();
+                inject_before_breaks(&mut body, &mut adjustments);
+            }
+
+            JsStmt::Loop { body }
         }
 
         JsStmt::While { cond, body } => {
@@ -234,9 +330,24 @@ fn rename_stmt(
             let mut inner_locked = locked.clone();
             for &r in current.keys() { inner_locked.insert(r); }
 
+            // NOTE: unlike `Loop`, a `While` has an *implicit* exit (the
+            // condition going false) alongside any explicit `break`s
+            // inside the body, and both land on the exact same place in
+            // JS (the statement right after the loop) with no way to
+            // tell them apart structurally. That means we can't attach a
+            // per-exit fixup the way `Loop` does above without either
+            // restructuring this into an explicit-break `Loop` or
+            // accepting a possible mismatch for registers that genuinely
+            // differ between the natural exit and a `break` exit. This
+            // is the known remaining gap from the original bug report --
+            // not fixed here, just not made worse. A `break` in this body
+            // belongs to this `While` (not some enclosing loop), so its
+            // own (discarded) collector is correct here regardless.
+            let mut inner_breaks: Vec<HashMap<u8, usize>> = Vec::new();
+
             JsStmt::While {
                 cond,
-                body: rename_block(body, current, next, &inner_locked),
+                body: rename_block(body, current, next, &inner_locked, &mut inner_breaks),
             }
         }
 
@@ -245,7 +356,9 @@ fn rename_stmt(
             let mut inner_locked = locked.clone();
             for &r in current.keys() { inner_locked.insert(r); }
 
-            let body = rename_block(body, current, next, &inner_locked);
+            // See the note in `While` above -- same limitation applies.
+            let mut inner_breaks: Vec<HashMap<u8, usize>> = Vec::new();
+            let body = rename_block(body, current, next, &inner_locked, &mut inner_breaks);
             let cond = rename_expr(cond, current);
             JsStmt::DoWhile { body, cond }
         }
@@ -265,7 +378,11 @@ fn rename_stmt(
             for (key, body) in cases {
                 let mut c_curr = current.clone();
                 let mut c_next = next.clone();
-                let rb = rename_block(body, &mut c_curr, &mut c_next, locked);
+                // A `break` inside a switch case breaks the switch, not
+                // any enclosing loop, so it gets its own (discarded)
+                // collector rather than the loop's `break_states`.
+                let mut case_breaks: Vec<HashMap<u8, usize>> = Vec::new();
+                let rb = rename_block(body, &mut c_curr, &mut c_next, locked, &mut case_breaks);
                 keys.push(key);
                 finals.push(c_curr);
                 bodies.push(rb);
@@ -275,7 +392,8 @@ fn rename_stmt(
             if let Some(body) = default {
                 let mut c_curr = current.clone();
                 let mut c_next = next.clone();
-                let rb = rename_block(body, &mut c_curr, &mut c_next, locked);
+                let mut case_breaks: Vec<HashMap<u8, usize>> = Vec::new();
+                let rb = rename_block(body, &mut c_curr, &mut c_next, locked, &mut case_breaks);
                 finals.push(c_curr);
                 bodies.push(rb);
             }
@@ -309,11 +427,42 @@ fn rename_block(
     current: &mut HashMap<u8, usize>,
     next: &mut HashMap<u8, usize>,
     locked: &HashSet<u8>,
+    break_states: &mut Vec<HashMap<u8, usize>>,
 ) -> Vec<JsStmt> {
     stmts
         .into_iter()
-        .map(|s| rename_stmt(s, current, next, locked))
+        .map(|s| rename_stmt(s, current, next, locked, break_states))
         .collect()
+}
+
+/// Splices `adjustments[i]` in immediately before the i-th `Break`
+/// encountered in `stmts` (in the same order `rename_block` visited
+/// them), recursing into `If` bodies but deliberately not descending
+/// into a nested `Loop`/`While`/`DoWhile`/`Switch` -- a `Break` in one of
+/// those belongs to that construct, not the one whose exits we're
+/// patching up here, and was never counted among `adjustments` in the
+/// first place.
+fn inject_before_breaks(
+    stmts: &mut Vec<JsStmt>,
+    adjustments: &mut impl Iterator<Item = Vec<JsStmt>>,
+) {
+    let mut i = 0;
+    while i < stmts.len() {
+        let is_break = matches!(stmts[i], JsStmt::Break);
+        if is_break {
+            if let Some(adj) = adjustments.next() {
+                let n = adj.len();
+                for (k, s) in adj.into_iter().enumerate() {
+                    stmts.insert(i + k, s);
+                }
+                i += n;
+            }
+        } else if let JsStmt::If { then_body, else_body, .. } = &mut stmts[i] {
+            inject_before_breaks(then_body, adjustments);
+            inject_before_breaks(else_body, adjustments);
+        }
+        i += 1;
+    }
 }
 
 fn rename_expr(expr: JsExpr, current: &mut HashMap<u8, usize>) -> JsExpr {

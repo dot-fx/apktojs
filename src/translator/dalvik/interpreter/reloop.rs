@@ -78,7 +78,7 @@ pub fn structure_cfg(tagged: Vec<TaggedStmt>, method_name: &str) -> Vec<JsStmt> 
     reloop(
         &blocks, &b2i, &loop_headers, &preds,
         0, i32::MAX, None, None,
-        &mut HashSet::new(), &mut out, 0, None, method_name,
+        &mut HashSet::new(), &mut out, 0, None, &[], method_name,
         &budget,
     );
 
@@ -99,6 +99,11 @@ fn reloop(
     out:          &mut Vec<JsStmt>,
     depth:        usize,
     consumed_pred_offset: Option<i32>,
+    // Statements to splice in immediately before any `Break` that exits
+    // to exactly `loop_exit` (as opposed to a break/goto that jumps
+    // further ahead, past code that only makes sense for the loop_exit
+    // path). See the loop-header handling below for why this exists.
+    natural_exit_tail: &[JsStmt],
     method_name: &str,
     budget: &Cell<usize>,
 ){
@@ -130,6 +135,57 @@ fn reloop(
             && Some(block.offset) != current_loop
         {
             let loop_end = cfg::find_loop_end(blocks, idx, block.offset, b2i);
+            let loop_end_idx = b2i.get(&loop_end).copied().unwrap_or(blocks.len());
+
+            // A normal loop has exactly one exit target: `loop_end`, the
+            // block right after the loop, and we simply resume structuring
+            // there once the loop is emitted. But some loops (e.g. Kotlin's
+            // compiled `firstOrNull`/`indexOfFirst`) have a *second* exit --
+            // typically an early `break` once a match is found -- whose
+            // target is further ahead than `loop_end`, jumping straight past
+            // code that's only valid for the "loop exhausted without
+            // finding anything" exit (e.g. resetting the result to null).
+            //
+            // If both exits fall through to the same post-loop code (the
+            // old behavior), that code runs unconditionally regardless of
+            // which exit actually fired -- silently corrupting whichever
+            // register it touches on the "found" path. We detect that
+            // second target here, structure the skipped code once on the
+            // side, and inline it directly into the loop_end exit's own
+            // `break` below -- so the far exit's break, which never reaches
+            // that inlined copy, is unaffected.
+            let mut far_targets: HashSet<i32> = HashSet::new();
+            if loop_end_idx < blocks.len() {
+                for bi in idx..loop_end_idx {
+                    for t in cfg::block_successors(&blocks[bi]) {
+                        if t > loop_end {
+                            far_targets.insert(t);
+                        }
+                    }
+                }
+            }
+            // Only handle the common single-extra-exit shape; bail to the
+            // old (still correct, just non-disambiguating) behavior if
+            // there's more than one distinct far target.
+            let far_exit: Option<i32> = if far_targets.len() == 1 {
+                far_targets.into_iter().next()
+            } else {
+                None
+            };
+
+            let computed_tail: Vec<JsStmt> = if let Some(ft) = far_exit {
+                let mut tail = Vec::new();
+                let mut tail_visited = HashSet::new();
+                reloop(
+                    blocks, b2i, loop_headers, preds,
+                    loop_end_idx, ft, loop_exit, current_loop,
+                    &mut tail_visited, &mut tail, depth + 1, None,
+                    natural_exit_tail, method_name, budget,
+                );
+                tail
+            } else {
+                Vec::new()
+            };
 
             let mut loop_visited = HashSet::new();
             loop_visited.insert(idx);
@@ -150,6 +206,15 @@ fn reloop(
                     body.push(stmt);
                 }
             }
+            // Any header-block statement that isn't the consumed
+            // condition-assignment (e.g. a register reset that the
+            // original bytecode runs unconditionally, every iteration,
+            // *before* the branch decides whether to exit) still needs to
+            // run before that branch check once we rebuild it as an
+            // explicit guard below -- otherwise a tail that reads such a
+            // register (like `computed_tail` can) would read a stale or
+            // never-assigned value on the exiting iteration.
+            let header_leftover_len = body.len();
 
             reloop(
                 blocks,
@@ -164,12 +229,46 @@ fn reloop(
                 &mut body,
                 depth + 1,
                 consumed_pred_offset,
+                &computed_tail,
                 method_name,
                 budget
             );
 
             if matches!(body.last(), Some(JsStmt::Continue)) {
                 body.pop();
+            }
+
+            if let Some(ft) = far_exit {
+                // Force the explicit-break form so the loop_end exit's tail
+                // can be inlined directly into its own `break`, keeping it
+                // off the far-exit path. The `while(cond)` hoist and
+                // do-while recovery both rely on there being a single,
+                // implicit exit, which no longer holds here.
+                let rest = body.split_off(header_leftover_len);
+                let mut safe_body = body; // = header_leftover, kept in front
+
+                match header_cond {
+                    Some(cond) => {
+                        let mut then_body = computed_tail.clone();
+                        then_body.push(JsStmt::Break);
+                        safe_body.push(JsStmt::If {
+                            cond: interpreter::negate(cond),
+                            then_body,
+                            else_body: vec![],
+                        });
+                    }
+                    // No simple header guard -- whatever break reaches
+                    // `loop_end` exactly is somewhere inside `rest` and
+                    // already got the tail spliced in via the generic
+                    // Goto/CondGoto handling further down.
+                    None => {}
+                }
+
+                safe_body.extend(rest);
+                out.push(JsStmt::Loop { body: safe_body });
+
+                idx = b2i.get(&ft).copied().unwrap_or(blocks.len());
+                continue;
             }
 
             if let Some(cond) = header_cond {
@@ -180,15 +279,16 @@ fn reloop(
                 if safe_to_hoist && !cond_regs_written_in_body(&cond, &body) {
                     out.push(JsStmt::While { cond, body });
                 } else {
-                    let mut safe_body = vec![
-                        JsStmt::If {
-                            cond: interpreter::negate(cond),
-                            then_body: vec![JsStmt::Break],
-                            else_body: vec![],
-                        },
-                    ];
+                    let rest = body.split_off(header_leftover_len);
+                    let mut safe_body = body; // = header_leftover, kept in front
 
-                    safe_body.extend(body);
+                    safe_body.push(JsStmt::If {
+                        cond: interpreter::negate(cond),
+                        then_body: vec![JsStmt::Break],
+                        else_body: vec![],
+                    });
+
+                    safe_body.extend(rest);
 
                     out.push(JsStmt::Loop {
                         body: safe_body,
@@ -234,6 +334,9 @@ fn reloop(
                     break;
                 }
                 if loop_exit.map_or(false, |e| t >= e) {
+                    if loop_exit == Some(t) {
+                        out.extend(natural_exit_tail.to_vec());
+                    }
                     out.push(JsStmt::Break);
                     break;
                 }
@@ -249,9 +352,11 @@ fn reloop(
                 let (cond, if_true, if_false) = (cond.clone(), *if_true, *if_false);
 
                 if Some(if_true) == loop_exit && if_false < if_true{
+                    let mut then_body = natural_exit_tail.to_vec();
+                    then_body.push(JsStmt::Break);
                     out.push(JsStmt::If {
                         cond,
-                        then_body: vec![JsStmt::Break],
+                        then_body,
                         else_body: vec![],
                     });
 
@@ -260,9 +365,11 @@ fn reloop(
                 }
 
                 if Some(if_false) == loop_exit && if_true < if_false {
+                    let mut then_body = natural_exit_tail.to_vec();
+                    then_body.push(JsStmt::Break);
                     out.push(JsStmt::If {
                         cond: interpreter::negate(cond),
-                        then_body: vec![JsStmt::Break],
+                        then_body,
                         else_body: vec![],
                     });
 
@@ -304,14 +411,16 @@ fn reloop(
                     let mut then_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            branch_idx, join, loop_exit, current_loop,
-                           &mut then_visited, &mut then_body, depth + 1, None, method_name, budget);
+                           &mut then_visited, &mut then_body, depth + 1, None,
+                           natural_exit_tail, method_name, budget);
                 }
 
                 let mut else_body = Vec::new();
                 let mut else_visited = visited.clone();
                 reloop(blocks, b2i, loop_headers, preds,
                        fall_idx, join, loop_exit, current_loop,
-                       &mut else_visited, &mut else_body, depth + 1, None, method_name, budget);
+                       &mut else_visited, &mut else_body, depth + 1, None,
+                       natural_exit_tail, method_name, budget);
 
                 if !then_body.is_empty() || !else_body.is_empty() {
                     out.push(JsStmt::If {
@@ -360,7 +469,8 @@ fn reloop(
                     let mut case_visited = visited.clone();
                     reloop(blocks, b2i, loop_headers, preds,
                            case_start, stop, loop_exit, current_loop,
-                           &mut case_visited, &mut case_body, depth + 1, None, method_name, budget);
+                           &mut case_visited, &mut case_body, depth + 1, None,
+                           natural_exit_tail, method_name, budget);
                     post_switch_visited.extend(case_visited);
 
                     let mut keys = target_keys[&t].clone();
@@ -378,7 +488,8 @@ fn reloop(
                     reloop(
                         blocks, b2i, loop_headers, preds,
                         default_start, switch_end, loop_exit, current_loop,
-                        &mut default_visited, &mut default_body, depth + 1, None, method_name, budget
+                        &mut default_visited, &mut default_body, depth + 1, None,
+                        natural_exit_tail, method_name, budget
                     );
 
                     post_switch_visited.extend(default_visited);

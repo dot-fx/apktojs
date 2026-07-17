@@ -28,16 +28,13 @@ fn simplify_first_instance(stmts: Vec<JsStmt>) -> Vec<JsStmt> {
             ) = (&stmts[i], &stmts[i + 1]) {
                 if iter_method == "iterator" && iter_args.is_empty() {
                     if let Some((elem_reg, class_name)) = try_rewrite_first_instance(body) {
-                        // We found the collection! Emit clean JS: elem_reg = collection.firstInstance(...)
                         out.push(JsStmt::Assign {
                             reg: elem_reg.clone(),
                             expr: JsExpr::Raw(format!(
-                                "{}.firstInstance(v{}_{} => v{}_{} instanceof {})",
+                                "firstInstance({}.iterator(), v{}_{} => v{}_{} instanceof {})",
                                 expr_to_str(coll_expr),
-                                elem_reg.reg,
-                                elem_reg.version,
-                                elem_reg.reg,
-                                elem_reg.version,
+                                elem_reg.reg, elem_reg.version,
+                                elem_reg.reg, elem_reg.version,
                                 class_name,
                             )),
                         });
@@ -128,15 +125,13 @@ fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(RegId, String)> {
     let mut instanceof_reg: Option<RegId> = None;
     let mut class_name: Option<String> = None;
 
-    for stmt in body {
+    for (idx, stmt) in body.iter().enumerate() {
         match stmt {
-            // 1. Find the iterator.next() assignment (e.g., v9_1 = v6_5.next())
             JsStmt::Assign { reg, expr: JsExpr::MethodCall { method, args, .. } }
             if method == "next" && args.is_empty() =>
                 {
                     element_reg = Some(reg.clone());
                 }
-            // 2. Find the instanceof check (e.g., v10_1 = v9_1 instanceof z1)
             JsStmt::Assign { reg, expr: JsExpr::BinOp { op, right, .. } }
             if op == &"instanceof" =>
                 {
@@ -145,13 +140,25 @@ fn try_rewrite_first_instance(body: &[JsStmt]) -> Option<(RegId, String)> {
                         class_name = Some(cls.clone());
                     }
                 }
-            // 3. Find the break condition (e.g., if (v10_1 !== 0) { break; })
+            // Shape A (original): if (matched) { break; }
             JsStmt::If { then_body, else_body, .. }
             if else_body.is_empty()
                 && then_body.len() == 1
                 && matches!(then_body[0], JsStmt::Break) =>
                 {
-                    // Once we have all three components, we have successfully identified the pattern.
+                    if let (Some(elem), Some(_inst), Some(cls)) =
+                        (&element_reg, &instanceof_reg, &class_name)
+                    {
+                        return Some((elem.clone(), cls.clone()));
+                    }
+                }
+            // Shape B: if (!matched) { continue; } ... break;  (as the immediate next stmt)
+            JsStmt::If { then_body, else_body, .. }
+            if else_body.is_empty()
+                && then_body.len() == 1
+                && matches!(then_body[0], JsStmt::Continue)
+                && matches!(body.get(idx + 1), Some(JsStmt::Break)) =>
+                {
                     if let (Some(elem), Some(_inst), Some(cls)) =
                         (&element_reg, &instanceof_reg, &class_name)
                     {
