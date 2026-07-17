@@ -135,8 +135,15 @@ globalThis.Headers = class Headers {
 };
 globalThis.Headers_Builder = Headers.Builder;
 
+function normalizeUrlString(u) {
+    if (typeof u === "string" && u.startsWith("//")) {
+        return "https:" + u;
+    }
+    return u;
+}
+
 globalThis.HttpUrl = class HttpUrl {
-    constructor(url) { this._url = url; }
+    constructor(url) { this._url = normalizeUrlString(url); }
     toString()   { return this._url; }
     fragment()   {
         const m = this._url.match(/#(.*)$/);
@@ -259,8 +266,9 @@ HttpUrl.Companion = {
     parse(url) {
         if (!url) return new HttpUrl("");
         try {
-            new URL(url.toString());
-            return new HttpUrl(url.toString());
+            const normalized = normalizeUrlString(url.toString());
+            new URL(normalized);
+            return new HttpUrl(normalized);
         } catch {
             return new HttpUrl("");
         }

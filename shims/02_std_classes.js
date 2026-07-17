@@ -197,6 +197,17 @@ globalThis.StringsKt = {
     "substringAfterLast$default"(str, delimiter, missingDelimiterValue, mask, marker) {
         if (str == null) return str;
         if ((mask & 2) !== 0) missingDelimiterValue = str;
+        // Kotlin's Char overload of substringAfterLast compiles to the raw
+        // UTF-16 code point (e.g. 46 for '.') being passed straight through
+        // from bytecode -- normalize it to a one-character string, or
+        // `lastIndexOf`/`.length` below silently misbehave (numeric
+        // lastIndexOf never matches real text, and `.length` on a number is
+        // undefined), causing this to fall back to `missingDelimiterValue`
+        // (== the whole original string, when mask says so) instead of the
+        // actual trailing segment.
+        if (typeof delimiter === "number") {
+            delimiter = String.fromCharCode(delimiter);
+        }
         const idx = str.lastIndexOf(delimiter);
         return idx === -1 ? missingDelimiterValue : str.slice(idx + delimiter.length);
     },

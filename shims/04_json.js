@@ -100,7 +100,7 @@ JsonObject.Companion = {
         return {
             descriptor: { serialName: "JsonObject" },
             serialize: (encoder, value) => { /* ... */ },
-            deserialize: (decoder) => { return new JsonObject(); }
+            deserialize: (decoder) => { return new JsonObject(decoder._json); }
         };
     }
 };
@@ -292,7 +292,6 @@ globalThis.Json = {
     }
 };
 
-// -- moved from tachiyomi glue file --
 
 globalThis.OkioStreamsKt = {
     decodeFromBufferedSource(deserializer, type, source) {
